@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.main import app as api_app  # api/app/main.py, mirrored from main
 from serve import views
+from serve.stream import app as stream_app
 
 AGENTS_URL = os.environ.get("AGENTS_URL", "http://127.0.0.1:8100").rstrip("/")
 DIST = Path(os.environ.get("UI_DIST", "/srv/ui")).resolve()
@@ -59,6 +60,7 @@ def version() -> dict[str, str]:
 # paths reach the warehouse instead of the team's API, which does not serve
 # them; and /api is claimed before the UI takes everything else.
 app.mount("/api/views", views.app)
+app.mount("/api/stream", stream_app)
 app.mount("/api", api_app)
 
 
