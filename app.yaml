@@ -3,7 +3,7 @@
 # .github/workflows/sync-from-monorepo.yml.
 name: floodsense-console
 port: 8080
-memory_mb: 512
+memory_mb: 384
 
 domains:
   - floodsense-console.zaindroid.me
@@ -22,14 +22,9 @@ database: false
 redis: false
 ai: false
 
-env:
-  # The warehouse. Unset, the agents fall back to their SQLite seed of the
-  # same contract views and label every answer a replay.
-  ZETARIS_REST_URL:
-    required: false
-  ZETARIS_API_KEY:
-    required: false
-  # floodsense.* instead of floodsense_seed.*. Only with the two above: the
-  # live schema without a live warehouse is a schema nothing can read.
-  FF_LIVE_DATA:
-    required: false
+# ZETARIS_REST_URL, ZETARIS_API_KEY and FF_LIVE_DATA are deliberately not
+# declared here. None is needed to start: unset, the agents answer from the
+# SQLite seed of the same contract views and label every answer a replay.
+# Declaring them would make zorc hold the first start waiting for values
+# that are tied to an external account; they go in afterwards with
+# set_app_env_vars, which is the tool that exists for exactly that.
