@@ -6,7 +6,7 @@ port: 8080
 memory_mb: 384
 
 domains:
-  - floodsense-console.zaindroid.me
+  - floodsense-desk.zaindroid.me
 
 # Compose has two more services, both behind profiles that are off by
 # default, and neither is asked for here. redis backs the API's semantic
