@@ -19,6 +19,11 @@ ENV VITE_API_URL=/api
 # arrive before the snapshot does, and a desk on fixtures is worse than a desk
 # that waited. The documented override exists for exactly this.
 ENV VITE_API_TIMEOUT_MS=6000
+# Ask FloodSense shows a recorded run rather than the fixture answer. This one
+# is ours: approved on this deployment, two claims, both graded by Nemotron
+# 3.5 Super VL through Meterless. GET /runs/<id>/replay has to keep answering,
+# which it does from the checkpoint volume.
+ENV VITE_REPLAY_RUN_ID=74ef0c508578
 RUN npm run build
 
 # 2. the engines run TypeScript directly and have no runtime dependencies,
