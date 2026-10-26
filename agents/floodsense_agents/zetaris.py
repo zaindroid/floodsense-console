@@ -107,7 +107,9 @@ def inline_bound(sql: str, params: tuple[str, ...] | list[str] | None) -> tuple[
 
 
 class Zetaris(Protocol):
-    def run_sql(self, sql: str, params: tuple[str, ...] | None = None) -> Evidence: ...
+    def run_sql(
+        self, sql: str, params: tuple[str, ...] | None = None, sample: int = 20
+    ) -> Evidence: ...
 
 
 def _failed_evidence(sql: str, exc: BaseException) -> Evidence:
@@ -209,7 +211,10 @@ class ZetarisClient:
             self._token = r.json()["idToken"]
             return self._token
 
-    def run_sql(self, sql: str, params: tuple[str, ...] | None = None) -> Evidence:
+    def run_sql(
+        self, sql: str, params: tuple[str, ...] | None = None, sample: int = 20
+    ) -> Evidence:
+        # sample: how many rows Evidence keeps. Nodes keep 20; GET /views keeps more.
         # A write is refused here, as an exception, before any request goes out.
         sql = check_sql(sql)
         qid = str(uuid.uuid4())
@@ -263,7 +268,7 @@ class ZetarisClient:
                 query_id=qid,
                 view=_view_of(sql),
                 sql=sql,
-                rows_sample=rows[:20],
+                rows_sample=rows[:sample],
                 row_count=len(rows),
                 executed_at_utc=now_utc(),
             )
@@ -462,7 +467,10 @@ class FakeZetaris:
                 )
         self._conn.commit()
 
-    def run_sql(self, sql: str, params: tuple[str, ...] | None = None) -> Evidence:
+    def run_sql(
+        self, sql: str, params: tuple[str, ...] | None = None, sample: int = 20
+    ) -> Evidence:
+        # sample: how many rows Evidence keeps. Nodes keep 20; GET /views keeps more.
         # A write is refused here, as an exception. A bad clock comes back as
         # Evidence.error so one predicate cannot take down the whole run.
         placeholder = check_sql(sql)
@@ -476,7 +484,7 @@ class FakeZetaris:
                 query_id=qid,
                 view=_view_of(rendered),
                 sql=rendered,
-                rows_sample=rows[:20],
+                rows_sample=rows[:sample],
                 row_count=len(rows),
                 executed_at_utc=now_utc(),
                 source="zetaris-fake",

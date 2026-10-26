@@ -40,7 +40,7 @@ Left out on purpose, until the owner proposes fields:
 
 - Gauge, station, region, portfolio, and exposure columns (Urvashi, Saleeta, Ayush, Zain).
 - Skeptic challenge records and the World Model board (Zain, Ayush). v0.4.0 names the loop and not the fields.
-- Retrieval traces and the chunk table (`v0.14.0` ingest, `FF_RAG_DOCS`). The citation record names the layer `c` locator rule and optional `chunk_id`. The chunk store is not a wire object. `v0.11.0` is the retired name and is not a tag.
+- Retrieval traces and the chunk table (in `v0.14.0`, behind `FF_RAG_DOCS`). The citation record names the layer `c` locator rule and optional `chunk_id`. The chunk store is not a wire object. `v0.11.0` is the retired name and is not a tag.
 - Notifications, sessions, and the mock's risk enum. The gameplan does not define those scales.
 - The mock's `served_from` pair `live` \| `cache` and its `DataProvenance` of `live` \| `sample` \| `reconstructed`. The wire value includes `replay`.
 

@@ -3,8 +3,8 @@ import type { RouteId } from "../types/ui";
 /** Desk in the hash. Same two roles the header already switches. */
 export type RoleId = RouteId;
 
-export const CITIZEN_PAGES = ["overview", "area", "actions", "evidence"] as const;
-export const INSURER_PAGES = ["approvals", "portfolio", "sites", "alerts", "review"] as const;
+export const CITIZEN_PAGES = ["now", "overview", "area", "actions", "evidence"] as const;
+export const INSURER_PAGES = ["now", "approvals", "portfolio", "sites", "alerts", "review"] as const;
 
 export type CitizenPage = (typeof CITIZEN_PAGES)[number];
 export type InsurerPage = (typeof INSURER_PAGES)[number];
@@ -17,12 +17,14 @@ export const DESK_NAV: {
   insurer: readonly { page: InsurerPage; label: string }[];
 } = {
   citizen: [
+    { page: "now", label: "Now" },
     { page: "overview", label: "Overview" },
     { page: "area", label: "My area" },
     { page: "actions", label: "What to do" },
     { page: "evidence", label: "Evidence" },
   ],
   insurer: [
+    { page: "now", label: "Now" },
     { page: "approvals", label: "Approvals" },
     { page: "portfolio", label: "Portfolio" },
     { page: "sites", label: "Sites / map" },

@@ -18,6 +18,7 @@ GET  /runs/{id}/exposure.csv       exposed policies for the claims system
 GET  /runs/{id}/verify             every agent step checked, plus which data path it used
 GET  /runs/{id}/record             the decision record: answer, sources, scores, signature
 POST /runs/{id}/dispatch           post the decision to DECISION_WEBHOOK, off unless set
+GET  /views/{name}                  rows of one allowlisted contract view (bare JSON array)
 GET  /health                       liveness: service, graph, version. Touches nothing.
 GET  /ready                        readiness: Zetaris answers a trivial query (503 if not)
 GET  /version                      build sha and timestamp
@@ -40,16 +41,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import re
 import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
 from floodsense_agents import __version__
 from floodsense_agents import desk, labelling
 from floodsense_agents.events import spec
 from floodsense_agents.models import ApprovalDecision, RunRequest
+from floodsense_agents.nightshift import available_providers
 from floodsense_agents.readiness import report as readiness_report
 from floodsense_agents.verify import report as verify_report
 from floodsense_agents.runtime import NotAwaitingApproval, RunNotFound, Runtime, ThreadNotFound
@@ -347,6 +351,8 @@ def config():
             "judge_repair_rounds": settings.judge_repair_rounds,
             "judge_min_score": settings.judge_min_score,
             "events": ["EMSR773", "EMSR517"],
+            # Test-only switch; one entry unless LLM_PROVIDER_SWITCH and a key are set.
+            "llm_providers": available_providers(),
         }
     )
 
@@ -452,6 +458,108 @@ async def events(run_id: str):
             await asyncio.sleep(0.5)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# GET /views/{name}. Column types from contracts/views.yaml. Only these names
+# reach SQL, and only as identifiers from this dict, never from the request.
+_NUM, _BOOL = "double", "boolean"
+VIEW_COLUMNS: dict[str, dict[str, str]] = {
+    "discharge_daily": {"discharge_m3s": _NUM},
+    "hazard_timeline": {"rain_mm": _NUM, "discharge_m3s": _NUM},
+    "hazard_now": {"rain_mm": _NUM, "discharge_m3s": _NUM},
+    "gauge_levels": {"level_cm": _NUM},
+    "exposure_join": {"lat": _NUM, "lon": _NUM, "sum_insured_eur": _NUM, "in_footprint": _BOOL},
+    "provenance": {},
+}
+# No contract view has an event_id column today; the filter applies only if one does.
+_EVENT_VIEWS: frozenset[str] = frozenset()
+VIEW_ROW_LIMIT = 5000
+_EVENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _coerce(value, kind: str):
+    """Zetaris REST returns strings. Numbers and booleans go back to their types."""
+    if value is None or value == "":
+        return None
+    if kind == _NUM:
+        try:
+            out = float(value)
+        except (TypeError, ValueError):
+            return None
+        return out if math.isfinite(out) else None
+    if kind == _BOOL:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in ("true", "t", "1", "yes"):
+            return True
+        if text in ("false", "f", "0", "no"):
+            return False
+        return None  # unknown: the row is dropped, never guessed False
+    return value
+
+
+# Fields the UI row validators (ui/src/lib/validate.ts) require. parseRows
+# rejects the whole array when one row fails, so such rows are dropped here.
+_REQUIRED: dict[str, tuple[str, ...]] = {
+    "discharge_daily": ("point_id", "date", "discharge_m3s", "source"),
+    "hazard_timeline": ("point_id", "ts_utc", "rain_mm"),
+    "hazard_now": ("point_id", "ts_utc", "rain_mm"),
+    "gauge_levels": ("station", "ts_utc"),
+    "exposure_join": ("policy_id", "site_id", "lat", "lon", "in_footprint", "sum_insured_eur", "segment"),
+    "provenance": ("dataset", "source_url", "publisher", "licence", "attribution", "fetched_at"),
+}
+
+
+def _usable(name: str, row: dict) -> bool:
+    for key in _REQUIRED[name]:
+        value = row.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return False
+    if name == "provenance":
+        url = str(row["source_url"]).strip().lower()
+        return url.startswith(("https://", "http://"))
+    return True
+
+
+@app.get("/views/{name}")
+def get_view(name: str, event_id: str | None = None):
+    """Rows of one contract view, from the schema the graph reads (FF_LIVE_DATA)."""
+    types = VIEW_COLUMNS.get(name)
+    if types is None:
+        raise HTTPException(404, f"unknown view {name!r}")
+    sql = f"SELECT * FROM {settings.schema}.{name}"
+    if event_id is not None and name in _EVENT_VIEWS:
+        if not _EVENT_ID.fullmatch(event_id):
+            raise HTTPException(422, "event_id must be letters, digits, _ or -")
+        sql += f" WHERE event_id = '{event_id}'"
+    # One extra row tells a full view from a capped one.
+    sql += f" LIMIT {VIEW_ROW_LIMIT + 1}"
+    ev = runtime().deps.zetaris.run_sql(sql, sample=VIEW_ROW_LIMIT + 1)
+    if getattr(ev, "error", None):
+        logging.getLogger("floodsense.views").warning(
+            "view %s read failed (query %s): %s", name, ev.query_id, ev.error
+        )
+        raise HTTPException(502, f"could not read view {name}")
+    fetched = ev.rows_sample
+    truncated = len(fetched) > VIEW_ROW_LIMIT
+    coerced = [
+        {k: (_coerce(v, types[k]) if k in types else v) for k, v in row.items()}
+        for row in fetched[:VIEW_ROW_LIMIT]
+    ]
+    rows = [r for r in coerced if _usable(name, r)]
+    headers = {
+        "x-query-id": ev.query_id,
+        "x-schema": settings.schema,
+        "x-executed-at": ev.executed_at_utc,
+        "x-dropped-rows": str(len(coerced) - len(rows)),
+        "cache-control": "no-store",
+    }
+    if truncated:
+        headers["x-truncated"] = "true"
+    return JSONResponse(rows, headers=headers)
 
 
 def main() -> None:

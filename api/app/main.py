@@ -81,7 +81,12 @@ app = FastAPI(title="FloodSense EU", version="0.12.0")
 cache = AnswerCache()
 limiter = RateLimiter()
 app.add_middleware(
-    CORSMiddleware, allow_origins=UI_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=UI_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+    # The UI reads the Zetaris query id and row metadata of /views from these headers.
+    expose_headers=["x-query-id", "x-schema", "x-executed-at", "x-dropped-rows", "x-truncated", "Retry-After"],
 )
 
 
@@ -369,6 +374,24 @@ async def past_runs(limit: int = 50, thread_id: str | None = None) -> Response:
     if thread_id:
         params["thread_id"] = thread_id
     return await _forward("GET", "/runs/past", params=params)
+
+
+@app.get("/views/{name}")
+async def get_view(name: str, event_id: str | None = None) -> Response:
+    """Rows of one contract view. Not cached, not rate limited."""
+    params = {"event_id": event_id} if event_id is not None else None
+    try:
+        r = await _agents_request("GET", f"/views/{name}", params=params)
+    except httpx.HTTPError as e:
+        raise HTTPException(503, f"agents service unreachable at {AGENTS_URL}: {type(e).__name__}")
+    headers = {k: v for k, v in r.headers.items() if k.lower().startswith("x-")}
+    headers["cache-control"] = "no-store"
+    return Response(
+        content=r.content,
+        status_code=r.status_code,
+        media_type=r.headers.get("content-type", "application/json"),
+        headers=headers,
+    )
 
 
 @app.get("/runs/{run_id}")

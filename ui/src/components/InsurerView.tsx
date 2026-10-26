@@ -3,6 +3,7 @@ import { Approvals } from "./Approvals";
 import { ServingLine } from "./Banners";
 import { Drilldown } from "./Drilldown";
 import { MapPanel } from "./MapPanel";
+import { NowPage } from "./NowPage";
 import { Portfolio } from "./Portfolio";
 import { ReviewColumn } from "./ReviewColumn";
 import type { InsurerPage } from "../lib/route";
@@ -10,6 +11,8 @@ import type { InsurerPage } from "../lib/route";
 /** One insurer page per hash. The old desk's parts, each on the page the IA gives it. */
 export function InsurerView({ page }: { page: InsurerPage }) {
   switch (page) {
+    case "now":
+      return <NowPage />;
     case "approvals":
       return (
         <div className="page-stack">

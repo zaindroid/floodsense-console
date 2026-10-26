@@ -5,6 +5,7 @@ import { servingLabel } from "../lib/format";
 import { honestyChip, originPill } from "../lib/origin";
 import { OriginList, ServingLine } from "./Banners";
 import { applyTheme, readTheme, type ThemeName } from "../lib/theme";
+import { PROVIDER_LABELS, showProviderSelect, type LlmProvider } from "../lib/llmProvider";
 
 export function Header() {
   const desk = useConsole();
@@ -68,6 +69,22 @@ export function Header() {
           </a>
         </nav>
         <div className="header-tools">
+          {showProviderSelect(desk.llmProviders) && (
+            <label className="llm-select" title="Local benchmarking only. The demo runs Nightshift.">
+              <span>LLM:</span>{" "}
+              <select
+                value={desk.llmProvider}
+                aria-label="LLM provider (test only)"
+                onChange={(event) => desk.setLlmProvider(event.target.value as LlmProvider)}
+              >
+                {desk.llmProviders.map((p) => (
+                  <option key={p} value={p}>
+                    {PROVIDER_LABELS[p]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="menu-anchor chip-anchor" ref={chipRef}>
             <button
               type="button"

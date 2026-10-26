@@ -466,9 +466,14 @@ def make(deps: Deps):
             bad = {h["id"] for h in state["hypotheses"] if h.get("status") == "not_supported"}
             hyps = [h for h in state["hypotheses"] if h["id"] not in bad]
             claims = [c for c in state["claims"] if c.get("hypothesis_id") not in bad]
-            summary = " ".join(
+            kept = " ".join(
                 f"{h['statement']} [{', '.join(h['citations'])}]." for h in hyps if h["citations"]
             )
+            # Nothing left is a result, not a missing value. Repeating the summary the
+            # first pass wrote would state a case the Skeptic has just broken, and an
+            # empty one loses the run: the desk refuses a recorded run with no summary
+            # and shows its fixture instead, reporting nothing.
+            summary = kept or "No hypothesis survived the Skeptic's counter-checks."
             return {
                 "hypotheses": hyps,
                 "claims": claims,

@@ -36,6 +36,11 @@ export interface RecordedRun {
   hallucinationRate: number | null;
   flaggedClaimIds: string[];
   trace: ReplayStep[];
+  /** live, cache or replay, from the body's own served_from. */
+  servedFrom: "live" | "cache" | "replay";
+  status: string | null;
+  threadId: string | null;
+  modelIds: string[];
 }
 
 const str = (value: unknown): string | null => (typeof value === "string" && value.length > 0 ? value : null);
@@ -67,6 +72,13 @@ function asCitation(value: unknown): ReplayCitation | null {
 export function adoptReplay(body: unknown, runId: string): RecordedRun | null {
   const run = rec(body);
   if (!run || run.served_from !== "replay") return null;
+  return adoptRunBody(run, runId);
+}
+
+/** Any labelled run body (live, cache or replay). Unknown served_from is refused, never guessed as live. */
+export function adoptRunBody(run: Record<string, unknown>, runId: string): RecordedRun | null {
+  const served = run.served_from;
+  if (served !== "live" && served !== "cache" && served !== "replay") return null;
   const summary = str(run.summary);
   if (!summary || !Array.isArray(run.claims)) return null;
   const claims: ReplayClaim[] = [];
@@ -90,7 +102,9 @@ export function adoptReplay(body: unknown, runId: string): RecordedRun | null {
   const id = str(run.run_id) ?? runId;
   return {
     runId: id,
-    label: str(rec(run.label)?.text) ?? `Replay of recorded run ${id} Â· not live`,
+    label:
+      str(rec(run.label)?.text) ??
+      (served === "live" ? "Live run" : served === "cache" ? `Cached answer · not live · run ${id}` : `Replay of recorded run ${id} · not live`),
     summary,
     claims,
     judgeOverall: num(judge?.overall),
@@ -100,6 +114,10 @@ export function adoptReplay(body: unknown, runId: string): RecordedRun | null {
       ? judge.flagged_claim_ids.filter((id): id is string => typeof id === "string")
       : [],
     trace,
+    servedFrom: served,
+    status: str(run.status),
+    threadId: str(run.thread_id),
+    modelIds: Array.isArray(run.model_ids) ? run.model_ids.filter((m): m is string => typeof m === "string") : [],
   };
 }
 

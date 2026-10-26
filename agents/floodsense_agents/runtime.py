@@ -18,6 +18,7 @@ from floodsense_agents.events import spec
 from floodsense_agents.graph import build_deps, build_graph
 from floodsense_agents.hitl import approval_payload
 from floodsense_agents.models import ApprovalDecision, RunRequest
+from floodsense_agents.nightshift import current_provider
 from floodsense_agents.zetaris import now_utc
 
 log = logging.getLogger("floodsense.runtime")
@@ -221,6 +222,7 @@ class Runtime:
         served_from, cached_at = labelling.computation_label(
             req.replay_ts, live=self._answers_are_live()
         )
+        token = current_provider.set(req.llm_provider)
         try:
             self.graph.invoke(
                 {
@@ -244,6 +246,8 @@ class Runtime:
         except Exception as e:
             log.exception("run %s failed", run_id)
             self.graph.update_state(self.cfg(run_id), {"status": "failed", "error": str(e)[:500]})
+        finally:
+            current_provider.reset(token)
         self._index_row(run_id)
         return self.snapshot(run_id)
 
@@ -251,7 +255,12 @@ class Runtime:
         s = self.snapshot(run_id)
         if s["status"] != "awaiting_approval":
             raise NotAwaitingApproval(f"run {run_id} is {s['status']}, not awaiting approval")
-        self.graph.invoke(Command(resume=decision.model_dump()), self.cfg(run_id))
+        provider = (s.get("request") or {}).get("llm_provider") or "nightshift"
+        token = current_provider.set(provider)
+        try:
+            self.graph.invoke(Command(resume=decision.model_dump()), self.cfg(run_id))
+        finally:
+            current_provider.reset(token)
         out = self.snapshot(run_id)
         # N1: store used to run here on every approval, FF_HMEM or not. It now
         # runs in the graph's Learn node (nodes/memory.py), behind FF_HMEM, so

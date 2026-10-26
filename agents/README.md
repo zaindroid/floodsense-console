@@ -55,6 +55,19 @@ The product UI is the Vite console in `ui/` (compose publishes it on `127.0.0.1:
 
 `replay_ts` is the "now" of a replay: the Watchers and the Investigator only see rows at or before it, so the demo can step through 29 Oct 2024 hour by hour.
 
+## LLM provider switch (local benchmarking only)
+
+Every model call goes to Nightshift (NVIDIA Nemotron). That is the default, and
+the demo and the submission run on it. For local speed and quality comparisons
+only, set `LLM_PROVIDER_SWITCH=true` and `ANTHROPIC_API_KEY` in `agents/.env`.
+`GET /config` then lists `llm_providers: ["nightshift", "anthropic"]`, the
+operator console shows an LLM select next to Run, and `POST /runs` accepts
+`"llm_provider": "anthropic"`. The choice is per run. Trace steps record
+`model_id` as `anthropic/<model>` (fast lane `ANTHROPIC_MODEL_FAST`, default
+`claude-haiku-5-5`; deep lane `ANTHROPIC_MODEL_DEEP`, default
+`claude-sonnet-5-5`). With the gate off, any value other than `nightshift` is
+rejected with 422. The API cache keeps each provider's answers apart.
+
 ## Human-in-the-loop
 
 `hitl.py` pauses with `interrupt()`; the checkpointer is **SQLite under `/data/checkpoints`** (the compose volume, `checkpoints.py`), so a paused run survives a restart of the container. Resume with `POST /runs/{id}/approval`: `approve` releases the outbound playbook actions, `edit` replaces the summary with the analyst's `edits` and releases, `reject` releases nothing. The decision lands in `approval{status, decision, edits, reviewer_note}` and in the trace. `FF_HITL=false` auto-approves and says so (`approval.status = "auto"`): dev only.

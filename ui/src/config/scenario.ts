@@ -41,7 +41,7 @@ export const MAP_BOUNDS = {
 };
 
 /** Used when VITE_API_TIMEOUT_MS is unset or not a positive number. */
-export const API_TIMEOUT_MS_DEFAULT = 1500;
+export const API_TIMEOUT_MS_DEFAULT = 10000;
 
 /**
  * Optional reads. Not the run contract. This desk does not call /runs.

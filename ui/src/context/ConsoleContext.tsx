@@ -22,6 +22,14 @@ import {
 import { loadFixtures, type FixtureBundle } from "../fixtures/load";
 import { datesOf, isModelledGlofasSource, pointById, pointsCrossing, rowAt } from "../lib/series";
 import { formatDay } from "../lib/format";
+import {
+  DEFAULT_PROVIDER,
+  effectiveProvider,
+  loadProviders,
+  readStoredProvider,
+  storeProvider,
+  type LlmProvider,
+} from "../lib/llmProvider";
 import { fixtureDischargeNotice, replayNotice, seedRowsNotice } from "../lib/notices";
 import { parseHash, routeHref, type DeskRoute, type PageId } from "../lib/route";
 import type { Answer, Approval, ApprovalStatus } from "../types/contract";
@@ -75,6 +83,10 @@ export interface ConsoleValue {
   playing: boolean;
   playSimulation: () => void;
   stopSimulation: () => void;
+  /** Test-only: providers GET /config offers. One entry hides the select. */
+  llmProviders: LlmProvider[];
+  llmProvider: LlmProvider;
+  setLlmProvider: (provider: LlmProvider) => void;
 }
 
 const ConsoleContext = createContext<ConsoleValue | null>(null);
@@ -157,6 +169,25 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
   const playUntilRef = useRef(SIM_WINDOW_END);
   const raisedFor = useRef(new Set<string>());
   const previousDate = useRef(date);
+  const [llmProviders, setLlmProviders] = useState<LlmProvider[]>([DEFAULT_PROVIDER]);
+  const [llmProvider, setLlmProviderState] = useState<LlmProvider>(DEFAULT_PROVIDER);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadProviders().then((list) => {
+      if (cancelled) return;
+      setLlmProviders(list);
+      setLlmProviderState(effectiveProvider(readStoredProvider(), list));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setLlmProvider = useCallback((provider: LlmProvider) => {
+    setLlmProviderState(provider);
+    storeProvider(provider);
+  }, []);
 
   const setDate = useCallback((next: string) => {
     setDateState(next);
@@ -350,6 +381,9 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
       playing,
       playSimulation,
       stopSimulation,
+      llmProviders,
+      llmProvider,
+      setLlmProvider,
     }),
     [
       deskRoute,
@@ -380,6 +414,9 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
       playing,
       playSimulation,
       stopSimulation,
+      llmProviders,
+      llmProvider,
+      setLlmProvider,
     ],
   );
 

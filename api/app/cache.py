@@ -136,6 +136,7 @@ def key_of(request: dict[str, Any], flags: str) -> tuple:
         normalize_utc(request.get("replay_ts")),
         request.get("lang") or DEFAULT_LANG,
         fold(str(request.get("doc_query") or "")),
+        _provider_of(request),
         flags,
     )
 
@@ -222,6 +223,13 @@ def annotate_replay(
     return run
 
 
+def _provider_of(source: dict[str, Any]) -> str:
+    """The LLM provider a run used. One provider's answer is never served for another."""
+    return str(
+        source.get("llm_provider") or _request_of(source).get("llm_provider") or "nightshift"
+    ).lower()
+
+
 def _lang_of(source: dict[str, Any]) -> str:
     return str(source.get("lang") or _request_of(source).get("lang") or DEFAULT_LANG)
 
@@ -237,7 +245,7 @@ def _event_of(source: dict[str, Any]) -> str:
 
 
 def ask_of(source: dict[str, Any]) -> tuple:
-    """Question, event, customer, clock, language and doc_query, as replay compares them."""
+    """Question, event, customer, clock, language, doc_query and LLM provider, as replay compares them."""
     return (
         fold(question_text(source)),
         _event_of(source),
@@ -245,6 +253,7 @@ def ask_of(source: dict[str, Any]) -> tuple:
         clock_from(source),
         _lang_of(source),
         fold(str(source.get("doc_query") or _request_of(source).get("doc_query") or "")),
+        _provider_of(source),
     )
 
 

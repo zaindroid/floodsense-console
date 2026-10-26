@@ -211,6 +211,19 @@ class RunRequest(BaseModel):
     # extra: layer (c) document search. The Investigator calls retrieve_docs with
     # it once when FF_RAG_DOCS is on. Null or blank skips retrieval.
     doc_query: str | None = None
+    # Test only: which LLM answers this run. Nightshift unless LLM_PROVIDER_SWITCH
+    # is on and ANTHROPIC_API_KEY is set (local benchmarking; see agents/README.md).
+    llm_provider: str = "nightshift"
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _known_provider(cls, v: str | None) -> str:
+        from floodsense_agents.nightshift import available_providers
+
+        v = (v or "nightshift").strip().lower()
+        if v not in available_providers():
+            raise ValueError(f"llm_provider {v!r} is not available on this deployment")
+        return v
 
     @field_validator("replay_ts")
     @classmethod

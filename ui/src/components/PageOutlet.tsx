@@ -1,6 +1,7 @@
 import { Colophon } from "./Banners";
 import { CitizenActions, CitizenArea, CitizenEvidence, CitizenOverview } from "./CitizenView";
 import { InsurerView } from "./InsurerView";
+import { NowPage } from "./NowPage";
 import { pageLabel, type CitizenPage } from "../lib/route";
 import { useConsole } from "../context/ConsoleContext";
 
@@ -28,6 +29,8 @@ export function PageOutlet() {
 
 function CitizenBody({ page }: { page: CitizenPage }) {
   switch (page) {
+    case "now":
+      return <NowPage />;
     case "overview":
       return <CitizenOverview />;
     case "area":

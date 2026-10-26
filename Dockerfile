@@ -57,7 +57,7 @@ COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
 # Rewritten on every sync by .github/workflows/sync-from-monorepo.yml.
-ENV GIT_SHA=066b237dde8fd4265a86f15f93473105e0d954ff BUILT_AT=2026-10-26T22:16:35Z SOURCE_REF=main
+ENV GIT_SHA=12d9c11823a793cf81d3e05bdd71a17a35104e9f BUILT_AT=2026-10-26T23:11:51Z SOURCE_REF=main
 
 # 8080 is the only port Coolify's healthcheck targets. The other three
 # services stay on loopback: nothing inside here is reachable from outside
