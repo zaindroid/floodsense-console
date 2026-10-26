@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.main import app as api_app  # api/app/main.py, mirrored from main
+from serve.views import app as views_app
 
 AGENTS_URL = os.environ.get("AGENTS_URL", "http://127.0.0.1:8100").rstrip("/")
 DIST = Path(os.environ.get("UI_DIST", "/srv/ui")).resolve()
@@ -54,7 +55,10 @@ def version() -> dict[str, str]:
     }
 
 
-# Order matters: /api is claimed before the UI takes everything else.
+# Order matters, twice over. /api/views is claimed before /api, so the view
+# paths reach the warehouse instead of the team's API, which does not serve
+# them; and /api is claimed before the UI takes everything else.
+app.mount("/api/views", views_app)
 app.mount("/api", api_app)
 
 if DIST.is_dir():
