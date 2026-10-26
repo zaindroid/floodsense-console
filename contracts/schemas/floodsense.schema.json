@@ -13,10 +13,14 @@
     "locator": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Where inside a source the quote was found. All fields optional until a source needs them.",
+      "description": "Where inside a source the quote was found. On layers a and b every field is optional. On layer c, page, paragraph, and lines are required, and page is never null, including when the source is section-structured. Section stays optional on every layer and does not stand in for page.",
       "properties": {
         "section": { "type": "string", "minLength": 1 },
-        "page": { "type": "integer", "minimum": 1 },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Required on layer c and never null there. A source with no PDF pagination still sets a page-like id: 1 for the whole document, or one id per section. Section does not replace page. Optional on layers a and b."
+        },
         "paragraph": { "type": "integer", "minimum": 1 },
         "lines": {
           "type": "string",
@@ -28,7 +32,7 @@
     "citation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One citation record. Layers: a Zetaris evidence, b original source, c document passage. Layer c is valid in the record and is implemented behind FF_RAG_DOCS (v0.11.0).",
+      "description": "One citation record. Layers: a Zetaris evidence, b original source, c document passage. Layer c additionally requires quote, query_id, and locator.page, locator.paragraph, and locator.lines. chunk_id is optional. The runtime stays behind FF_RAG_DOCS. v0.14.0 is the layer (c) ship tag and is not cut in this change. v0.11.0 is the retired name and is not a tag. Layers a and b do not require locator, quote, query_id, or chunk_id.",
       "required": [
         "citation_id",
         "claim_id",
@@ -67,7 +71,7 @@
         "content_sha256": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$",
-          "description": "SHA-256 hex of the stored text, or of the quote when storage is pointer."
+          "description": "Lower-case SHA-256 hex. When quote is present this is the hash of that quote as UTF-8, which is what the Judge compares. A layer c chunk row keeps a separate hash of the full passage; that hash is not this field."
         },
         "storage": {
           "enum": ["full_text", "pointer"],
@@ -77,9 +81,32 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
-          "description": "Zetaris query id when this citation rests on an evidence record."
+          "description": "Zetaris query id. Required on layer c, from the JDBC hydrate of the ranked chunk. Optional on layers a and b."
+        },
+        "chunk_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "pgvector chunk id for a layer c passage. Optional. Layers a and b omit it."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "layer": { "const": "c" } },
+            "required": ["layer"]
+          },
+          "then": {
+            "required": ["quote", "locator", "query_id"],
+            "properties": {
+              "locator": {
+                "type": "object",
+                "required": ["page", "paragraph", "lines"]
+              }
+            }
+          }
+        }
+      ]
     },
     "evidence": {
       "type": "object",

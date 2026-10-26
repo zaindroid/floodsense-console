@@ -19,13 +19,13 @@ import time
 
 from floodsense_agents.events import point_label
 from floodsense_agents.governance import IN_FOOTPRINT_SQL
-from floodsense_agents.models import Citation, Claim, Evidence, Hypothesis
+from floodsense_agents.models import Citation, Claim, Evidence, Hypothesis, Locator
 from floodsense_agents.nightshift import parse_json
 from floodsense_agents.nodes.watchers import last_complete_day, window
 from floodsense_agents.prompts import INVESTIGATOR, rows_block
 from floodsense_agents.settings import settings
 from floodsense_agents.state import Deps, FloodState, add_evidence, trace
-from floodsense_agents.zetaris import run_sql_parallel
+from floodsense_agents.zetaris import now_utc, run_sql_parallel
 
 log = logging.getLogger("floodsense.investigator")
 # 21,600,000 is one number, not 21.6 and 0, and the 3 in "m3/s" is not a
@@ -369,6 +369,94 @@ def _model(
     return hyps, claims, str(js.get("summary", "")), model_id
 
 
+_DOC_SQL = (
+    "SELECT chunk_id, text, text_sha256, title, source_url, publisher, licence, "
+    "attribution, page, paragraph, lines, section FROM PGVECTOR_RAG.chunks"
+)
+
+
+def _text(raw: dict, key: str) -> str | None:
+    value = raw.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _doc_locator(raw: dict) -> Locator | None:
+    locator = raw.get("locator")
+    if not isinstance(locator, dict):
+        return None
+    page = locator.get("page")
+    paragraph = locator.get("paragraph")
+    lines = locator.get("lines")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        return None
+    if isinstance(paragraph, bool) or not isinstance(paragraph, int) or paragraph < 1:
+        return None
+    if not isinstance(lines, str) or not lines:
+        return None
+    section = locator.get("section")
+    return Locator(
+        page=page,
+        paragraph=paragraph,
+        lines=lines,
+        section=section if isinstance(section, str) and section else None,
+    )
+
+
+def _attach_documents(claims, raws, request, query):
+    """Append layer (c) citations to the named claim, or to a new fact claim C-doc."""
+    target_id = request.get("doc_claim_id")
+    target = next(
+        (item for item in claims if isinstance(target_id, str) and item.claim_id == target_id),
+        None,
+    )
+    if target is None:
+        target = Claim(claim_id="C-doc", text=query, kind="fact")
+        claims = [*claims, target]
+    start = 1 + sum(1 for item in target.citations if item.layer == "c")
+    rows_for_q: dict[str, list[dict]] = {}
+    for offset, raw in enumerate(raws, start=start):
+        qid = raw.get("query_id") if isinstance(raw.get("query_id"), str) else None
+        chunk_id = raw.get("chunk_id") if isinstance(raw.get("chunk_id"), str) else None
+        target.citations.append(
+            Citation(
+                citation_id=f"{target.claim_id}-c{offset}",
+                claim_id=target.claim_id,
+                layer="c",
+                source_url=_text(raw, "source_url"),
+                title=_text(raw, "title"),
+                publisher=_text(raw, "publisher"),
+                licence=_text(raw, "licence"),
+                attribution=_text(raw, "attribution"),
+                locator=_doc_locator(raw),
+                quote=_text(raw, "quote"),
+                content_sha256=_text(raw, "content_sha256"),
+                storage="full_text",
+                query_id=qid,
+                chunk_id=chunk_id if chunk_id and len(chunk_id) <= 128 else None,
+                accessed_at=now_utc(),
+            )
+        )
+        text = raw.get("text")
+        digest = raw.get("text_sha256")
+        if qid and isinstance(text, str) and isinstance(digest, str):
+            sample = {"text": text, "text_sha256": digest}
+            if chunk_id and len(chunk_id) <= 128:
+                sample["chunk_id"] = chunk_id
+            rows_for_q.setdefault(qid, []).append(sample)
+    evidence = [
+        Evidence(
+            query_id=qid,
+            view="PGVECTOR_RAG.chunks",
+            sql=_DOC_SQL,
+            rows_sample=rows[:20],
+            row_count=len(rows),
+            executed_at_utc=now_utc(),
+        )
+        for qid, rows in rows_for_q.items()
+    ]
+    return claims, evidence
+
+
 def make(deps: Deps):
     def investigator(state: FloodState) -> dict:
         t = time.time()
@@ -405,6 +493,27 @@ def make(deps: Deps):
                     hyps, claims, summary, lane = m_hyps, m_claims, m_summary or summary, "fast"
         except Exception as e:  # the deterministic chain is complete; the model only refines it
             log.warning("investigator: model step skipped (%s)", str(e)[:140])
+        doc_note = ""
+        if deps.retrieve_docs is not None:
+            request = state.get("request") or {}
+            doc_query = request.get("doc_query")
+            if isinstance(doc_query, str) and doc_query.strip():
+                try:
+                    result = deps.retrieve_docs(
+                        doc_query,
+                        request.get("doc_k", 4),
+                        {"event_id": state.get("event_id")},
+                    )
+                except Exception as exc:
+                    doc_note = f" retrieve_docs error: {str(exc)[:200]}"
+                else:
+                    if result.error:
+                        doc_note = f" retrieve_docs error: {result.error}"
+                    elif result.citations:
+                        claims, doc_evidence = _attach_documents(
+                            claims, result.citations, request, doc_query
+                        )
+                        extra = [*extra, *doc_evidence]
         return {
             "hypotheses": [h.model_dump() for h in hyps],
             "claims": [c.model_dump() for c in claims],
@@ -415,7 +524,7 @@ def make(deps: Deps):
             "trace": trace(
                 state,
                 "investigator",
-                f"{len(hyps)} hypotheses, {len(claims)} cited claims",
+                f"{len(hyps)} hypotheses, {len(claims)} cited claims{doc_note}",
                 lane=lane,
                 model_id=model_id,
                 started=t,

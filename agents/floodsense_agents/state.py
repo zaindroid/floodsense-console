@@ -7,6 +7,7 @@ the pydantic models in models.py type them at the edges.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
 
@@ -45,6 +46,7 @@ class Deps:
     llm: LLM
     memory: Memory
     world: WorldModel = field(default_factory=NoWorld)  # engines sidecar; NoWorld = off
+    retrieve_docs: Callable[..., Any] | None = None
 
 
 class FloodState(TypedDict, total=False):

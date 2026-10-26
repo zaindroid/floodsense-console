@@ -40,7 +40,7 @@ Left out on purpose, until the owner proposes fields:
 
 - Gauge, station, region, portfolio, and exposure columns (Urvashi, Saleeta, Ayush, Zain).
 - Skeptic challenge records and the World Model board (Zain, Ayush). v0.4.0 names the loop and not the fields.
-- Retrieval traces and document chunks (v0.11.0, `FF_RAG_DOCS`).
+- Retrieval traces and the chunk table (`v0.14.0` ingest, `FF_RAG_DOCS`). The citation record names the layer `c` locator rule and optional `chunk_id`. The chunk store is not a wire object. `v0.11.0` is the retired name and is not a tag.
 - Notifications, sessions, and the mock's risk enum. The gameplan does not define those scales.
 - The mock's `served_from` pair `live` \| `cache` and its `DataProvenance` of `live` \| `sample` \| `reconstructed`. The wire value includes `replay`.
 
@@ -57,7 +57,7 @@ python tasks.py lint
 
 ## Open questions
 
-- Which citation fields are required for each layer, once Urvashi and Saleeta see the real source columns. The gameplan already marks those names as a proposal.
+- Layer `c` required fields are settled: `quote`, `query_id`, and `locator.page`, `locator.paragraph`, and `locator.lines`. `page` is never null on layer `c`. A source with no PDF pagination still sets a page-like id (`1` for the whole document, or one id per section). `section` stays optional and does not replace `page`. `chunk_id` stays optional. Layers `a` and `b` still leave locator and quote optional. The gameplan still marks the shared column names as a proposal until Urvashi and Saleeta see the real source columns.
 - Whether `edited` is the right status word for the gameplan's "edit", or whether Zain wants a separate amended body. Today the human note is `note`.
 - Empty `evidence` is allowed because not every claim is a number. A finished numeric claim should still carry evidence. The schema does not enforce that link beyond `query_id`.
 - The mock Judge used `verdict`, `groundedness`, `citationCoverage`, and `skepticResolution`, and a claim support of `contradicted`. This schema follows the gameplan table instead (`supported`, `partial`, `unsupported`).

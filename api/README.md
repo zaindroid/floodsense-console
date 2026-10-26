@@ -22,7 +22,7 @@ curl -s http://127.0.0.1:8000/health
 
 Inside compose the process listens on port 8000 and is published on host port 18000. On the host, run `python -m floodsense_agents` from `agents/` first and set `AGENTS_URL=http://127.0.0.1:8100` (the default). From the repo root, `python tasks.py init-env` copies `.env.example` to `.env` before `up`.
 
-The NVIDIA provider key is not a variable for this service. It lives only in Nightshift's Providers tab.
+The NVIDIA chat key is not a variable for this service. It lives only in Nightshift's Providers tab. Document embeddings use `NVIDIA_NIM_API_KEY` in a gitignored env file (ADR 0009). This service does not call them.
 
 ## Cache and labelled replay
 

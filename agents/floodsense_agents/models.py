@@ -58,6 +58,7 @@ class Citation(BaseModel):
     content_sha256: str | None = None
     storage: Literal["full_text", "pointer"] | None = None
     query_id: str | None = None
+    chunk_id: str | None = None
 
 
 class Claim(BaseModel):

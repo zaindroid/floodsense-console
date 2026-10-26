@@ -140,6 +140,26 @@ def _provenance_row(view: str, provenance: list[dict[str, Any]]) -> dict[str, An
     return {}
 
 
+def _projected_locator(locator: object) -> dict[str, Any] | None:
+    """Copy a page locator. A null section is omitted; page below 1 is not a locator."""
+    if not isinstance(locator, dict):
+        return None
+    page = locator.get("page")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        return None
+    out: dict[str, Any] = {"page": page}
+    paragraph = locator.get("paragraph")
+    if isinstance(paragraph, int) and not isinstance(paragraph, bool) and paragraph >= 1:
+        out["paragraph"] = paragraph
+    lines = locator.get("lines")
+    if isinstance(lines, str) and lines:
+        out["lines"] = lines
+    section = locator.get("section")
+    if isinstance(section, str) and section:
+        out["section"] = section
+    return out
+
+
 def _project_citations(
     claims: list[dict[str, Any]], evidence: list[dict[str, Any]], provenance: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -200,6 +220,12 @@ def _project_citations(
                 item["query_id"] = query_id
             if quote and len(quote) <= 600:
                 item["quote"] = quote
+            locator = _projected_locator(raw.get("locator"))
+            if locator is not None:
+                item["locator"] = locator
+            chunk_id = raw.get("chunk_id")
+            if isinstance(chunk_id, str) and 1 <= len(chunk_id) <= 128:
+                item["chunk_id"] = chunk_id
             seen.add(citation_id)
             out.append(item)
     return out

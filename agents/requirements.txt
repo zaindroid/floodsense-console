@@ -7,3 +7,4 @@ httpx>=0.27,<1
 httpx2>=2,<3
 pydantic>=2.7,<3
 pyyaml>=6,<7
+psycopg>=3.2,<4

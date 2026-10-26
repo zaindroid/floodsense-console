@@ -72,10 +72,16 @@ def build_graph(
     *,
     ff_skeptic: bool | None = None,
     ff_judge: bool | None = None,
+    ff_rag_docs: bool | None = None,
 ):
     deps = deps or build_deps()
     use_skeptic = settings.ff_skeptic if ff_skeptic is None else ff_skeptic
     use_judge = settings.ff_judge if ff_judge is None else ff_judge
+    use_rag = settings.ff_rag_docs if ff_rag_docs is None else ff_rag_docs
+    if not use_rag:
+        deps.retrieve_docs = None
+    elif deps.retrieve_docs is None:
+        deps.retrieve_docs = _live_retrieve(deps.zetaris)
 
     g = StateGraph(FloodState)
     g.add_node("watchers", world_model.recording(watchers.make(deps), deps, "watchers"))
@@ -121,3 +127,26 @@ def build_graph(
     g.add_edge("hitl", "learn")
     g.add_edge("learn", END)
     return g.compile(checkpointer=checkpointer or MemorySaver())
+
+
+def _live_retrieve(zetaris):
+    """Rank in Postgres and hydrate through this run's Zetaris client."""
+
+    def retrieve(query: str, k: int, filters: dict | None):
+        from floodsense_agents.retrieve_docs import (
+            default_embedder,
+            default_hydrate,
+            default_search,
+            retrieve_docs,
+        )
+
+        return retrieve_docs(
+            query,
+            k,
+            filters,
+            embedder=default_embedder,
+            search=default_search,
+            hydrate=lambda ids: default_hydrate(ids, zetaris),
+        )
+
+    return retrieve

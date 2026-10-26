@@ -5,7 +5,7 @@ round back to the Playbook; the human sees the scores either way.
 
 Per claim:
   coverage           >= 1 citation                                   deterministic
-  citation_faithful  layer (a) query_id exists and returned rows; layer (c) quote hash matches   deterministic
+  citation_faithful  layer (a) query returned rows; layer (c) quote is in that passage   deterministic
   numbers_match      every number in the claim is in its cited rows (relative tolerance NUMERIC_TOLERANCE)   deterministic
   licence_ok         no full text shown from a pointer-only source                               deterministic
   grounding          supported | partial | unsupported — deep lane seeing only the claim and its evidence;
@@ -24,7 +24,7 @@ import logging
 import math
 import time
 
-from floodsense_agents.models import Claim, Evidence, JudgeScore, JudgeSummary
+from floodsense_agents.models import Citation, Claim, Evidence, JudgeScore, JudgeSummary
 from floodsense_agents.nightshift import parse_json
 from floodsense_agents.prompts import JUDGE, rows_block
 from floodsense_agents.settings import settings
@@ -67,13 +67,43 @@ def _match(n: float, vals: list[float]) -> bool:
     return any(math.isclose(n, v, rel_tol=tol, abs_tol=0.5 if abs(n) < 10 else 0.0) for v in vals)
 
 
+def _passage_rows(citation: Citation, rows: list[dict]) -> list[dict]:
+    """The chunk named on the citation, or every row when the sample has no chunk id."""
+    chunk_id = citation.chunk_id
+    if not isinstance(chunk_id, str) or not chunk_id:
+        return rows
+    if not any(isinstance(row.get("chunk_id"), str) for row in rows):
+        return rows
+    return [row for row in rows if row.get("chunk_id") == chunk_id]
+
+
+def layer_c_matches_passage(citation: Citation, evidence: dict[str, Evidence]) -> bool:
+    if not citation.quote or not citation.content_sha256:
+        return False
+    if hashlib.sha256(citation.quote.encode()).hexdigest() != citation.content_sha256:
+        return False
+    ev = evidence.get(citation.query_id or "")
+    if ev is None or ev.error or not ev.rows_sample:
+        return False
+    for row in _passage_rows(citation, ev.rows_sample):
+        text = row.get("text")
+        digest = row.get("text_sha256")
+        if not isinstance(text, str) or not isinstance(digest, str):
+            continue
+        if hashlib.sha256(text.encode()).hexdigest() != digest:
+            continue
+        if citation.quote in text:
+            return True
+    return False
+
+
 def score_claim(c: Claim, evidence: dict[str, Evidence], deps: Deps | None) -> JudgeScore:
     a = [evidence[x.query_id] for x in c.citations if x.layer == "a" and x.query_id in evidence]
     coverage = len(c.citations) > 0
     faithful = bool(a) and all(e.row_count > 0 and not e.error for e in a)
     for x in c.citations:
         if x.layer == "c" and x.quote and x.content_sha256:
-            faithful = faithful and hashlib.sha256(x.quote.encode()).hexdigest() == x.content_sha256
+            faithful = faithful and layer_c_matches_passage(x, evidence)
     licence_ok = all(
         not (x.storage == "pointer" and x.quote and len(x.quote) > 400) for x in c.citations
     )
