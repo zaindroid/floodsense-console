@@ -1,0 +1,89 @@
+name: sync-from-monorepo
+
+# The console is owned in the monorepo; this repo is only its deploy mirror.
+# Pulls the five folders the image builds from, and the resulting push is
+# what asks for a redeploy.
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+env:
+  SOURCE_REPO: GenAI-Open-Agent-Hackathon/Hackathon-Monorepo
+  SOURCE_REF: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the monorepo
+        id: clone
+        env:
+          TOKEN: ${{ secrets.MONOREPO_TOKEN }}
+        run: |
+          # Skipped rather than failed. Without a token this job cannot do
+          # anything, and a red run every hour buries a real failure instead
+          # of reporting one. It names the one missing thing and stops.
+          if [ -z "$TOKEN" ]; then
+            echo "MONOREPO_TOKEN is empty, so $SOURCE_REPO cannot be read."
+            echo "Nothing was mirrored. Add the secret to enable this job:"
+            echo "  a fine-grained PAT, read-only on Contents of $SOURCE_REPO"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git clone --quiet --depth 1 --branch "$SOURCE_REF" \
+            "https://x-access-token:$TOKEN@github.com/$SOURCE_REPO.git" source
+
+      - name: Mirror what the image builds from
+        id: mirror
+        if: steps.clone.outputs.skip != 'true'
+        run: |
+          for dir in ui api agents engines contracts; do
+            rm -rf "$dir"
+            cp -r "source/$dir" "$dir"
+          done
+          # Build-time and Compose-only things the image never reads.
+          rm -rf ui/node_modules engines/test engines/scripts engines/tsconfig.json
+          # Tests stay in the monorepo, which is where they are owned and
+          # where CI runs them. Several of them read folders this mirror
+          # does not carry (zetaris/migrations, contracts/views.yaml), so a
+          # copy of them here would look broken while meaning nothing.
+          rm -rf agents/tests api/tests contracts/tests
+          find ui/src -name '*.test.ts' -delete
+          find . -name __pycache__ -type d -prune -exec rm -rf {} +
+          sha=$(git -C source rev-parse HEAD)
+          rm -rf source
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the mirror already matches $SOURCE_REF at ${sha:0:12}"
+            exit 0
+          fi
+
+          # Stamp only on a real change, or GET /version would churn hourly.
+          built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          sed -i "s|^ENV GIT_SHA=.*|ENV GIT_SHA=$sha BUILT_AT=$built SOURCE_REF=$SOURCE_REF|" Dockerfile
+          git add -A
+          git -c user.name="Zain Ul Haq" -c user.email="zainey4@gmail.com" \
+              commit -q -m "sync: the console at ${sha:0:12} from $SOURCE_REF"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Ask the platform to redeploy
+        if: steps.mirror.outputs.changed == 'true'
+        env:
+          HOOK: ${{ secrets.DEPLOY_WEBHOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "No DEPLOY_WEBHOOK secret. The mirror is current in git,"
+            echo "but the container serves the previous build until someone"
+            echo "redeploys. Pushes alone do not redeploy."
+            exit 0
+          fi
+          curl -fsS -X GET "$HOOK" -o /dev/null
+          echo "redeploy requested"

@@ -1,0 +1,35 @@
+# zorc app contract. Everything but serve/ is mirrored from
+# GenAI-Open-Agent-Hackathon/Hackathon-Monorepo main by
+# .github/workflows/sync-from-monorepo.yml.
+name: floodsense-console
+port: 8080
+memory_mb: 512
+
+domains:
+  - floodsense-console.zaindroid.me
+
+# Compose has two more services, both behind profiles that are off by
+# default, and neither is asked for here. redis backs the API's semantic
+# cache one day, but api/app/cache.py says REDIS_URL "is not read yet" and
+# the cache runs in process, so a Redis would sit idle. pgvector is for RAG,
+# and nothing reads PGVECTOR_DSN anywhere in the repo yet. Provisioning
+# either would put a real instance on a shared node for nothing to talk to.
+#
+# No AI gateway either: every model call goes through Meterless Nightshift,
+# which is deployed nowhere, so the graph runs on its deterministic stand-in
+# and labels every answer accordingly.
+database: false
+redis: false
+ai: false
+
+env:
+  # The warehouse. Unset, the agents fall back to their SQLite seed of the
+  # same contract views and label every answer a replay.
+  ZETARIS_REST_URL:
+    required: false
+  ZETARIS_API_KEY:
+    required: false
+  # floodsense.* instead of floodsense_seed.*. Only with the two above: the
+  # live schema without a live warehouse is a schema nothing can read.
+  FF_LIVE_DATA:
+    required: false

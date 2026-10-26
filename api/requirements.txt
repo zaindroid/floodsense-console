@@ -1,0 +1,5 @@
+fastapi>=0.115,<1
+uvicorn>=0.32,<1
+httpx>=0.27,<1
+# Current Starlette TestClient imports httpx2. Without it, `make test` warns.
+httpx2>=2,<3

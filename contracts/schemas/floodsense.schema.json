@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:floodsense:contracts",
+  "title": "FloodSense EU shared contracts",
+  "description": "Wire format for agents, the API, and the UI. Field names follow docs/GAMEPLAN.md. This file is the source of truth. Python and TypeScript mirrors are checked against it.",
+  "$defs": {
+    "date_time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "ISO 8601 date-time with a Z or a numeric offset. The pattern is what CI enforces. format is recorded for tools that check it."
+    },
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where inside a source the quote was found. All fields optional until a source needs them.",
+      "properties": {
+        "section": { "type": "string", "minLength": 1 },
+        "page": { "type": "integer", "minimum": 1 },
+        "paragraph": { "type": "integer", "minimum": 1 },
+        "lines": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Line range inside the paragraph, for example 3-5."
+        }
+      }
+    },
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One citation record. Layers: a Zetaris evidence, b original source, c document passage. Layer c is valid in the record and is implemented behind FF_RAG_DOCS (v0.11.0).",
+      "required": [
+        "citation_id",
+        "claim_id",
+        "layer",
+        "source_url",
+        "title",
+        "publisher",
+        "accessed_at",
+        "licence",
+        "attribution",
+        "content_sha256",
+        "storage"
+      ],
+      "properties": {
+        "citation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "claim_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "layer": { "enum": ["a", "b", "c"] },
+        "source_url": {
+          "type": "string",
+          "minLength": 1,
+          "format": "uri",
+          "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:\\S+$"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "publisher": { "type": "string", "minLength": 1 },
+        "accessed_at": { "$ref": "#/$defs/date_time" },
+        "licence": { "type": "string", "minLength": 1 },
+        "attribution": { "type": "string", "minLength": 1 },
+        "locator": { "$ref": "#/$defs/locator" },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600,
+          "description": "One or two sentences. The schema does not count sentences."
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 hex of the stored text, or of the quote when storage is pointer."
+        },
+        "storage": {
+          "enum": ["full_text", "pointer"],
+          "description": "full_text for sources we may store. pointer for paywalled or copyrighted sources."
+        },
+        "query_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Zetaris query id when this citation rests on an evidence record."
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Layer (a). The Zetaris query behind a number. Row columns are not fixed yet.",
+      "required": ["query_id", "view", "sql", "rows_sample", "row_count", "executed_at_utc"],
+      "properties": {
+        "query_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "view": { "type": "string", "minLength": 1 },
+        "sql": { "type": "string", "minLength": 1 },
+        "rows_sample": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "object" },
+          "description": "At most 20 rows. Keys depend on the view."
+        },
+        "row_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Full result size. May be larger than rows_sample."
+        },
+        "executed_at_utc": { "$ref": "#/$defs/date_time" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A sentence that states a fact, a number, or a cause. Citations point at claim_id.",
+      "required": ["claim_id", "text"],
+      "properties": {
+        "claim_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    },
+    "judge_claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Judge output for one claim. The Judge does not approve the claim.",
+      "required": [
+        "claim_id",
+        "grounding",
+        "citation_faithful",
+        "numbers_match",
+        "score",
+        "rationale",
+        "model_id"
+      ],
+      "properties": {
+        "claim_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "grounding": { "enum": ["supported", "partial", "unsupported"] },
+        "citation_faithful": { "type": "boolean" },
+        "numbers_match": { "type": "boolean" },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "rationale": { "type": "string", "minLength": 1 },
+        "model_id": {
+          "enum": [
+            "meterless/fast",
+            "meterless/deep",
+            "nvidia/nemotron-3.5-super-vl-120b-a12b",
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "deterministic"
+          ],
+          "description": "Id the graph recorded. The contract names are the routing modes meterless/fast and meterless/deep. A reply that carries a grounding may instead name the model that answered. deterministic means the Judge did not call a model, or the reply did not parse or had no grounding: the score stays deterministic and does not keep a returned model id. Not meterless/auto. The discontinued nvidia/nemotron-3-super-120b-a12b id is not accepted. Which model answers a routing name today is the table at the top of docs/architecture/c4.md."
+        }
+      }
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-claim scores plus the overall score that goes in the approval payload.",
+      "required": ["claims", "overall_score"],
+      "properties": {
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/judge_claim" }
+        },
+        "overall_score": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "playbook_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A proposed action. It cites evidence. It is not sent until a human approves.",
+      "required": ["action_id", "run_id", "title", "detail", "citation_ids"],
+      "properties": {
+        "action_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1 },
+        "detail": { "type": "string", "minLength": 1 },
+        "citation_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Human decision on one playbook action. approve, edit, and reject are the decisions. pending is the queue.",
+      "required": ["approval_id", "run_id", "action_id", "status"],
+      "properties": {
+        "approval_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "action_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "enum": ["pending", "approved", "edited", "rejected"] },
+        "note": { "type": "string", "minLength": 1 },
+        "judge": {
+          "$ref": "#/$defs/judge",
+          "description": "Present once the Judge has scored the run (v0.10.0). Optional before that."
+        }
+      }
+    },
+    "answer_fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One run as the API serves it to the UI.",
+      "required": ["run_id", "question", "claims", "citations", "evidence", "served_from"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "question": { "type": "string", "minLength": 1 },
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/claim" }
+        },
+        "citations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/citation" }
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence" }
+        },
+        "served_from": { "enum": ["live", "cache", "replay"] },
+        "cached_at": {
+          "type": ["string", "null"],
+          "description": "Required timestamp when served_from is cache or replay. Null or omitted when live. The cache rule checks the date-time format."
+        },
+        "playbook_actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/playbook_action" }
+        },
+        "judge": { "$ref": "#/$defs/judge" }
+      }
+    },
+    "answer_cache_rule": {
+      "if": {
+        "properties": { "served_from": { "const": "live" } },
+        "required": ["served_from"]
+      },
+      "then": {
+        "properties": { "cached_at": { "type": "null" } }
+      },
+      "else": {
+        "required": ["cached_at"],
+        "properties": { "cached_at": { "$ref": "#/$defs/date_time" } }
+      }
+    },
+    "answer": {
+      "allOf": [
+        { "$ref": "#/$defs/answer_fields" },
+        { "$ref": "#/$defs/answer_cache_rule" }
+      ]
+    }
+  }
+}
