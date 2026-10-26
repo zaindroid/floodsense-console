@@ -20,10 +20,11 @@ ENV VITE_API_URL=/api
 # that waited. The documented override exists for exactly this.
 ENV VITE_API_TIMEOUT_MS=6000
 # Ask FloodSense shows a recorded run rather than the fixture answer. This one
-# is ours: approved on this deployment, two claims, both graded by Nemotron
-# 3.5 Super VL through Meterless. GET /runs/<id>/replay has to keep answering,
-# which it does from the checkpoint volume.
-ENV VITE_REPLAY_RUN_ID=74ef0c508578
+# is ours: approved on this deployment against live Zetaris, three cited claims,
+# judge 1.0 with no flagged claim. Not a Nightshift run, because adoptReplay
+# refuses a run whose summary is empty and every model-backed run here returns
+# one -- the deterministic path fills it and the model path does not.
+ENV VITE_REPLAY_RUN_ID=919348cefb7c
 RUN npm run build
 
 # 2. the engines run TypeScript directly and have no runtime dependencies,
