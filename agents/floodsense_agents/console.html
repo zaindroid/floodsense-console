@@ -177,6 +177,17 @@ async function api(path, opts) {
     $("#status").textContent = "service unreachable";
     $("#status").className = "tag err";
   }
+  // ?run=<id> opens a past run without starting a new one.
+  const past = new URLSearchParams(location.search).get("run");
+  if (past && /^[A-Za-z0-9_-]{1,64}$/.test(past)) {
+    try {
+      run = await api("/runs/" + past);
+      render();
+    } catch (err) {
+      $("#runerr").textContent = err.message;
+      $("#runerr").className = "err mono";
+    }
+  }
 })();
 
 $("#ask").addEventListener("submit", async (e) => {

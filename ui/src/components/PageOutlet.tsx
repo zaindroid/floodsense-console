@@ -1,13 +1,14 @@
-import { CitizenView } from "./CitizenView";
+import { Colophon } from "./Banners";
+import { CitizenActions, CitizenArea, CitizenEvidence, CitizenOverview } from "./CitizenView";
 import { InsurerView } from "./InsurerView";
-import { DESK_NAV } from "../lib/route";
+import { pageLabel, type CitizenPage } from "../lib/route";
 import { useConsole } from "../context/ConsoleContext";
 
-/** Thin outlet. Both desks still render the current views until a later split. */
+/** One page body per hash. The Evidence drawer and the replay strip stay on the shell. */
 export function PageOutlet() {
-  const { route, page } = useConsole();
-  const desk = route === "citizen" ? "Citizen" : "Insurer";
-  const label = DESK_NAV[route].find((item) => item.page === page)?.label ?? "Overview";
+  const { deskRoute } = useConsole();
+  const desk = deskRoute.role === "citizen" ? "Citizen" : "Insurer";
+  const label = pageLabel(deskRoute);
 
   return (
     <>
@@ -17,7 +18,23 @@ export function PageOutlet() {
       <p className="section-label page-kicker">
         {desk} · {label}
       </p>
-      {route === "citizen" ? <CitizenView /> : <InsurerView />}
+      <div className="workspace" data-page={`${deskRoute.role}-${deskRoute.page}`}>
+        {deskRoute.role === "citizen" ? <CitizenBody page={deskRoute.page} /> : <InsurerView page={deskRoute.page} />}
+        <Colophon />
+      </div>
     </>
   );
+}
+
+function CitizenBody({ page }: { page: CitizenPage }) {
+  switch (page) {
+    case "overview":
+      return <CitizenOverview />;
+    case "area":
+      return <CitizenArea />;
+    case "actions":
+      return <CitizenActions />;
+    case "evidence":
+      return <CitizenEvidence />;
+  }
 }

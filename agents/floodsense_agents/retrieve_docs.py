@@ -163,14 +163,25 @@ def _event_id(filters: dict | None) -> tuple[str | None, str | None]:
     return None, "event_id must be EMSR773 or EMSR517"
 
 
+def _positive_int(value: object) -> int | None:
+    """Zetaris REST returns every column as a string, so '3' counts as 3."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        value = int(value)
+    if isinstance(value, int) and value >= 1:
+        return value
+    return None
+
+
 def _citation(query_id: str, row: dict) -> dict | None:
     text = row.get("text")
-    page = row.get("page")
-    if not isinstance(text, str) or isinstance(page, bool) or not isinstance(page, int) or page < 1:
+    page = _positive_int(row.get("page"))
+    if not isinstance(text, str) or page is None:
         return None
-    paragraph = row.get("paragraph")
+    paragraph = _positive_int(row.get("paragraph"))
     lines = row.get("lines")
-    if isinstance(paragraph, bool) or not isinstance(paragraph, int) or paragraph < 1:
+    if paragraph is None:
         return None
     if not isinstance(lines, str) or not lines:
         return None

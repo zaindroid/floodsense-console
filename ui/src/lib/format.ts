@@ -55,7 +55,7 @@ export function servingLabel(answer: Answer): ServingLabel {
   };
 }
 
-/** Banner word next to the time. Cache and replay never use the word live. */
+/** Word next to the serving time under the top-bar chip. Cache and replay never use the word live. */
 export function servingQualifier(label: ServingLabel): "live" | "cache" | "replay" | "unlabelled" {
   if (label.kind === "live") return "live";
   if (label.servedFrom === "cache") return "cache";

@@ -1,8 +1,8 @@
 # API
 
-Purpose: the FastAPI service the UI and the demo call. It owns the public contract (gameplan §5.5) and proxies the run lifecycle to the agents service at `AGENTS_URL`: `POST /runs` (an optional `thread_id` continues a conversation), `GET /runs/past` (`?thread_id=` for one conversation), `GET /runs/{id}`, `GET /runs/{id}/replay`, `GET /runs/{id}/events` (SSE), `GET|POST /runs/{id}/approval`, `GET /runs/{id}/citations`, `GET /config`, `GET /health`. Every response carries `served_from` and `cached_at`. The cache and labelled replay sit here, in front of the proxy (below); rate limits (Mihir) slot in here too. CORS is open to the UI origins only (`UI_ORIGINS`, default `http://localhost:15173,http://127.0.0.1:15173`).
+Purpose: the FastAPI service the UI and the demo call. It owns the public contract (gameplan §5.5) and proxies the run lifecycle to the agents service at `AGENTS_URL`: `POST /runs` (an optional `thread_id` continues a conversation), `GET /runs/past` (`?thread_id=` for one conversation), `GET /runs/{id}`, `GET /runs/{id}/replay`, `GET /runs/{id}/events` (SSE), `GET|POST /runs/{id}/approval`, `GET /runs/{id}/citations`, `GET /config`, `GET /health`. Every response carries `served_from` and `cached_at`. The cache and labelled replay sit here, in front of the proxy (below); rate limits guard the write routes (below). CORS is open to the UI origins only (`UI_ORIGINS`, default `http://localhost:15173,http://127.0.0.1:15173`).
 
-Owner: Zain (runs, SSE, approval) and Ayush (cache and past runs). Mihir adds rate limits.
+Owner: Zain (runs, SSE, approval) and Ayush (cache and past runs). Mihir (rate limits).
 
 PowerShell, from this directory. `python -m uvicorn` avoids the `Scripts` vs `bin` difference. `curl` in PowerShell is not curl.
 
@@ -33,3 +33,7 @@ GAMEPLAN "Caching and the honest demo", in `app/cache.py`. Both are off unless t
 - **Never presented as live.** The trace keeps the original run's timestamps, and `GET /config` reports the cache under `api_cache`.
 
 The cache lives in this process (`CACHE_MAX_ENTRIES`, 256). `REDIS_URL` is not read yet, so a restart empties the cache but not the agents' recordings.
+
+## Rate limits
+
+`app/ratelimit.py`, in this process, no extra dependency. `POST /runs` has a token bucket per client IP: `RATE_LIMIT_RUNS_PER_MIN` (10) per minute, with a burst of the same size (at least 1). `POST /runs/{id}/approval` is not limited, so a reviewer can always approve a run. Live `POST /runs` calls in flight to the agents are capped at `RATE_LIMIT_MAX_CONCURRENT_RUNS` (2); a cache hit does not take a slot, and with `FF_CACHED_REPLAY` on a full cap is answered with the labelled replay when one exists. Either refusal is `429` with a `Retry-After` header (the bucket's wait, or `RATE_LIMIT_CONCURRENCY_RETRY_AFTER_S`, 30, when the cap is full). `0` turns a guard off. GET routes (health, config, past runs, replay, SSE events) are not limited. Limits are per process and per client IP; behind a reverse proxy run uvicorn with `--forwarded-allow-ips` so the client IP is the real one.

@@ -1,7 +1,8 @@
 import { ConsoleProvider } from "./context/ConsoleContext";
+import { AskFloodSense } from "./components/AskFloodSense";
+import { EvidenceDrawer } from "./components/EvidenceDrawer";
 import { Header } from "./components/Header";
 import { PageOutlet } from "./components/PageOutlet";
-import { ReplayAnswerChip } from "./components/ReplayAnswerChip";
 import { ReplayBar } from "./components/ReplayBar";
 import { SideNav } from "./components/SideNav";
 import { useCollapsedNav } from "./hooks/useCollapsedNav";
@@ -26,7 +27,8 @@ function Shell() {
           <PageOutlet />
         </main>
       </div>
-      <ReplayAnswerChip />
+      <AskFloodSense />
+      <EvidenceDrawer />
     </div>
   );
 }

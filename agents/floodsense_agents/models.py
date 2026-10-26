@@ -208,6 +208,9 @@ class RunRequest(BaseModel):
     # extra: continue a conversation. An earlier run's thread_id; the new run
     # gets that thread's earlier turns as short-term memory. Null starts a thread.
     thread_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    # extra: layer (c) document search. The Investigator calls retrieve_docs with
+    # it once when FF_RAG_DOCS is on. Null or blank skips retrieval.
+    doc_query: str | None = None
 
     @field_validator("replay_ts")
     @classmethod

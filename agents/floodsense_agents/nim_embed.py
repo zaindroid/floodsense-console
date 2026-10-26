@@ -9,7 +9,7 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
-MODEL = "nvidia/llama-nemotron-embed-1b-v2"
+MODEL = "nvidia/nemotron-3.5-embed-1b"
 DIMENSIONS = 2048
 DEFAULT_URL = "https://integrate.api.nvidia.com/v1/embeddings"
 _INPUT_TYPES = ("passage", "query")

@@ -3,21 +3,31 @@ import { statusLabel } from "../lib/origin";
 import { useConsole } from "../context/ConsoleContext";
 import type { ProvenanceRow } from "../types/views";
 
-export function CacheBanner() {
+/**
+ * Answer serving line (ADR 0006: cached or replayed output is always labelled). It was the cache banner.
+ * `inline` puts it above the answer on Approvals and Review, announced as a status. The chip menu repeats it.
+ */
+export function ServingLine({ inline = false }: { inline?: boolean }) {
   const { answer } = useConsole();
   const serving = servingLabel(answer);
   return (
-    <p className={`banner banner-${serving.kind}`} data-serving={serving.servedFrom} role="status">
+    <p
+      className={`serving serving-${serving.kind}${inline ? " serving-inline" : ""}`}
+      data-serving={serving.servedFrom}
+      role={inline ? "status" : undefined}
+    >
       <strong>{serving.kind === "cached" ? `${serving.text} UTC` : serving.text}</strong>
       <span>
         {" "}
-        · {servingQualifier(serving)} · run {serving.runId}
+        · {servingQualifier(serving)}
+        {serving.kind === "live" ? "" : " · not live"} · original run {serving.runId}
       </span>
     </p>
   );
 }
 
-export function OriginBanner() {
+/** Origin of each view. It was the origin banner. It now sits under the top-bar chip and on Portfolio. */
+export function OriginList() {
   const desk = useConsole();
   const parts = [
     ["discharge_daily", desk.discharge],
@@ -26,15 +36,19 @@ export function OriginBanner() {
     ["provenance", desk.provenance],
   ] as const;
   return (
-    <p className="banner banner-origin" data-origin={parts.map(([, slice]) => slice.origin).join(" ")}>
-      {parts.map(([name, slice], index) => (
-        <span key={name}>
-          {index > 0 && " · "}
-          <span className="origin-name">{name}</span> {statusLabel(slice.origin)}
-        </span>
-      ))}
-      <span> · {desk.healthDetail}</span>
-    </p>
+    <div className="origin-list" data-origin={parts.map(([, slice]) => slice.origin).join(" ")}>
+      <dl className="kv">
+        {parts.map(([name, slice]) => (
+          <div key={name}>
+            <dt>{name}</dt>
+            <dd>
+              {statusLabel(slice.origin)} · {slice.detail}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="note">{desk.healthDetail}</p>
+    </div>
   );
 }
 

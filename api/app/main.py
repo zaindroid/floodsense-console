@@ -15,8 +15,9 @@ back from the agents still says replay, and that banner must not leak.
 The semantic cache and labelled replay sit here, in front of the proxy, each
 behind its flag (FF_SEMANTIC_CACHE, FF_CACHED_REPLAY; see app/cache.py). A
 cached or replayed answer is never presented as live. Cache and replay
-lookups use CACHE_LOOKUP_TIMEOUT_S, not the 600s run budget. Rate limits are
-a later increment and slot in here too.
+lookups use CACHE_LOOKUP_TIMEOUT_S, not the 600s run budget. Rate limits
+(app/ratelimit.py) guard POST /runs with a per-client token bucket and cap live runs in flight; both answer 429 with
+Retry-After. GET routes are not limited.
 
 GET  /health                      this service
 GET  /config                      flags and lanes, from the agents
@@ -57,6 +58,7 @@ from app.cache import (
     same_ask,
 )
 from app.project import project_run
+from app.ratelimit import RateLimiter
 
 AGENTS_URL = os.environ.get("AGENTS_URL", "http://127.0.0.1:8100").rstrip("/")
 UI_ORIGINS = [
@@ -77,6 +79,7 @@ TIMEOUT = httpx.Timeout(
 
 app = FastAPI(title="FloodSense EU", version="0.12.0")
 cache = AnswerCache()
+limiter = RateLimiter()
 app.add_middleware(
     CORSMiddleware, allow_origins=UI_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["*"]
 )
@@ -203,9 +206,7 @@ async def _from_cache(body: dict) -> dict | None:
     entry = cache.lookup(body, flags)
     if entry is None:
         return None
-    code, run = await _agents_json(
-        "GET", f"/runs/{entry.run_id}", timeout=_lookup_timeout()
-    )
+    code, run = await _agents_json("GET", f"/runs/{entry.run_id}", timeout=_lookup_timeout())
     if code != 200 or not isinstance(run, dict):
         cache.drop(entry.run_id)  # the agents no longer hold it
         return None
@@ -298,8 +299,30 @@ async def config() -> Response:
     return JSONResponse(data)
 
 
+def _too_many(detail: str, retry_after: int) -> JSONResponse:
+    return JSONResponse(
+        {"detail": detail, "served_from": None, "cached_at": None},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _bucket_refusal(request: Request) -> JSONResponse | None:
+    wait = limiter.buckets.take(_client_key(request))
+    if wait is None:
+        return None
+    return _too_many("rate limit: too many requests from this client", wait)
+
+
 @app.post("/runs", status_code=201)
 async def start_run(request: Request) -> Response:
+    refused = _bucket_refusal(request)
+    if refused is not None:
+        return refused
     body = await request.json()
     fresh = bool(body.pop("fresh", False)) if isinstance(body, dict) else False
     settings = cache.settings
@@ -307,6 +330,15 @@ async def start_run(request: Request) -> Response:
         hit = await _from_cache(body)
         if hit is not None:
             return _json_run(hit, 200)
+    if not limiter.slots.try_acquire():
+        if settings.cached_replay and isinstance(body, dict):
+            replay = await _replay_for(body, "too many live runs in flight")
+            if replay is not None:
+                return _json_run(replay, 200)
+        return _too_many(
+            "rate limit: too many runs in flight, try again shortly",
+            limiter.settings.concurrency_retry_after_s,
+        )
     try:
         resp = await _forward("POST", "/runs", body=body)
     except HTTPException as e:
@@ -319,6 +351,8 @@ async def start_run(request: Request) -> Response:
             if replay is not None:
                 return _json_run(replay, 200)
         raise
+    finally:
+        limiter.slots.release()  # a replay fallback above is a short lookup
     if settings.cached_replay and isinstance(body, dict):
         failure = _live_failure(resp)
         if failure:

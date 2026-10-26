@@ -23,7 +23,7 @@ import { loadFixtures, type FixtureBundle } from "../fixtures/load";
 import { datesOf, isModelledGlofasSource, pointById, pointsCrossing, rowAt } from "../lib/series";
 import { formatDay } from "../lib/format";
 import { fixtureDischargeNotice, replayNotice, seedRowsNotice } from "../lib/notices";
-import { parseHash, type DeskRoute, type PageId } from "../lib/route";
+import { parseHash, routeHref, type DeskRoute, type PageId } from "../lib/route";
 import type { Answer, Approval, ApprovalStatus } from "../types/contract";
 import type { EvidenceTopic, Notice, RouteId } from "../types/ui";
 import type {
@@ -44,6 +44,8 @@ interface ViewSlice<T> {
 export interface ConsoleValue {
   route: RouteId;
   page: PageId;
+  /** Same as route and page, as one union so a page switch can narrow it. */
+  deskRoute: DeskRoute;
   healthOk: boolean;
   healthDetail: string;
   discharge: ViewSlice<DischargeDailyRow[]>;
@@ -61,6 +63,10 @@ export interface ConsoleValue {
   evidenceTopic: EvidenceTopic;
   openEvidence: (topic: EvidenceTopic) => void;
   closeEvidence: () => void;
+  /** Ask FloodSense popup. Closed at start. A route change never opens it. */
+  askOpen: boolean;
+  openAsk: () => void;
+  closeAsk: () => void;
   approval: Approval;
   decide: (status: ApprovalStatus, note: string) => void;
   resetApproval: () => void;
@@ -73,8 +79,12 @@ export interface ConsoleValue {
 
 const ConsoleContext = createContext<ConsoleValue | null>(null);
 
-function readRoute(): DeskRoute {
-  return parseHash(window.location.hash);
+/** Reads the hash and rewrites it to the canonical href, so `#/insurer` and #36 hashes settle on one page. */
+function readRoute(approvalPending: boolean): DeskRoute {
+  const route = parseHash(window.location.hash, approvalPending);
+  const href = routeHref(route.role, route.page);
+  if (window.location.hash !== href) window.history.replaceState(null, "", href);
+  return route;
 }
 
 function initialApproval(answer: Answer): Approval {
@@ -113,7 +123,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 }
 
 function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: ReactNode }) {
-  const [deskRoute, setDeskRoute] = useState<DeskRoute>(readRoute);
+  const [deskRoute, setDeskRoute] = useState<DeskRoute>(() => parseHash(window.location.hash));
   const [healthOk, setHealthOk] = useState(false);
   const [healthDetail, setHealthDetail] = useState("Checking API health. Rows on screen are fixtures until a view route answers.");
   const [discharge, setDischarge] = useState<ViewSlice<DischargeDailyRow[]>>(
@@ -133,7 +143,10 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
   const [pointId, setPointId] = useState(DEFAULT_POINT_ID);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [evidenceTopic, setEvidenceTopic] = useState<EvidenceTopic>("discharge");
+  const [askOpen, setAskOpen] = useState(false);
   const [approval, setApproval] = useState<Approval>(() => initialApproval(bundle.answer));
+  const approvalPendingRef = useRef(true);
+  approvalPendingRef.current = approval.status === "pending";
   const [notices, setNotices] = useState<Notice[]>(() => [
     replayNotice(bundle.answer),
     fixtureDischargeNotice(bundle.discharge),
@@ -150,13 +163,15 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
   }, []);
 
   useEffect(() => {
-    if (!window.location.hash) {
-      window.history.replaceState(null, "", "#/insurer");
-    }
-    const onHash = () => setDeskRoute(readRoute());
+    const onHash = () => setDeskRoute(readRoute(approvalPendingRef.current));
+    onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    setEvidenceOpen(false);
+  }, [deskRoute]);
 
   useEffect(() => {
     if (dates.length > 0 && !dates.includes(date)) setDateState(dates[0]);
@@ -269,6 +284,10 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
 
   const closeEvidence = useCallback(() => setEvidenceOpen(false), []);
 
+  const openAsk = useCallback(() => setAskOpen(true), []);
+
+  const closeAsk = useCallback(() => setAskOpen(false), []);
+
   const decide = useCallback((status: ApprovalStatus, note: string) => {
     setApproval((current) => ({ ...current, status, note }));
   }, []);
@@ -302,6 +321,7 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
     () => ({
       route: deskRoute.role,
       page: deskRoute.page,
+      deskRoute,
       healthOk,
       healthDetail,
       discharge,
@@ -319,6 +339,9 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
       evidenceTopic,
       openEvidence,
       closeEvidence,
+      askOpen,
+      openAsk,
+      closeAsk,
       approval,
       decide,
       resetApproval,
@@ -346,6 +369,9 @@ function ReadyConsole({ bundle, children }: { bundle: FixtureBundle; children: R
       evidenceTopic,
       openEvidence,
       closeEvidence,
+      askOpen,
+      openAsk,
+      closeAsk,
       approval,
       decide,
       resetApproval,

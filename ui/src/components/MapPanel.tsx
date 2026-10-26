@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useConsole } from "../context/ConsoleContext";
 import {
   BAND_ELEVATED_M3S,
@@ -9,15 +9,12 @@ import {
   MAP_CHANNEL_IDS,
   MOUTH_LAT,
   MOUTH_LON,
-  SIM_WINDOW_END,
-  SIM_WINDOW_START,
   SIMULATED_ALERT_M3S,
 } from "../config/scenario";
-import { formatDay, formatEur, formatM3s } from "../lib/format";
+import { formatDay, formatM3s } from "../lib/format";
 import { statusLabel } from "../lib/origin";
 import {
   dischargeBand,
-  exposureStats,
   insideMap,
   mapAspectRatio,
   markerText,
@@ -26,20 +23,12 @@ import {
 } from "../lib/series";
 import type { ValenciaPoint } from "../types/views";
 
-export function MapPanel({
-  simulate,
-  showBook,
-  exposureDefault,
-}: {
-  simulate: boolean;
-  showBook: boolean;
-  exposureDefault: boolean;
-}) {
+/** Map and replay date. The alert simulation is on Alerts and the book KPIs are on Portfolio. */
+export function MapPanel({ exposureDefault }: { exposureDefault: boolean }) {
   const desk = useConsole();
   const [showExposure, setShowExposure] = useState(exposureDefault);
   const rowsToday = rowsOnDate(desk.discharge.rows, desk.date);
   const byPoint = new Map(rowsToday.map((row) => [row.point_id, row]));
-  const stats = useMemo(() => exposureStats(desk.exposure.rows), [desk.exposure.rows]);
   const peakCount = rowsToday.filter((row) => row.discharge_m3s >= SIMULATED_ALERT_M3S).length;
   const dateIndex = Math.max(0, desk.dates.indexOf(desk.date));
   const coastX = project(COAST_LAT, COAST_LON).x;
@@ -77,19 +66,7 @@ export function MapPanel({
             ))}
           </select>
         </label>
-        {simulate && (
-          <button type="button" className="button" onClick={desk.playSimulation} disabled={desk.dates.length < 2}>
-            {desk.playing ? "Stop" : "Simulate alert"}
-          </button>
-        )}
       </div>
-      {simulate && (
-        <p className="note">
-          Steps {formatDay(SIM_WINDOW_START)}–{formatDay(SIM_WINDOW_END)}. A notice is added when discharge crosses {SIMULATED_ALERT_M3S} m³/s.
-          Simulation only. Not an official warning.
-          {desk.playing ? " Playing." : ""}
-        </p>
-      )}
       <div className="map-stage" style={{ aspectRatio: mapAspectRatio() }}>
         <svg className="map-bg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <rect width="100" height="100" fill="var(--land)" />
@@ -178,28 +155,6 @@ export function MapPanel({
         Bounds {MAP_BOUNDS.minLat}–{MAP_BOUNDS.maxLat} N, {MAP_BOUNDS.minLon}–{MAP_BOUNDS.maxLon} E.
         {peakCount > 0 ? ` ${peakCount} point${peakCount === 1 ? "" : "s"} in the peak band this day.` : ""}
       </p>
-      {showBook && (
-        <dl className="kpis">
-          <div>
-            <dt>Points</dt>
-            <dd>{desk.points.length}</dd>
-          </div>
-          <div>
-            <dt>Peak band</dt>
-            <dd>{peakCount}</dd>
-          </div>
-          <div>
-            <dt>in_footprint</dt>
-            <dd>
-              {stats.inFootprint} / {stats.policies}
-            </dd>
-          </div>
-          <div>
-            <dt>Sum insured</dt>
-            <dd>{formatEur(stats.sumInsured)}</dd>
-          </div>
-        </dl>
-      )}
     </section>
   );
 }

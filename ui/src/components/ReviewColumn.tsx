@@ -1,24 +1,21 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { causalChain, skepticVerdicts } from "../fixtures/console";
 import { useConsole } from "../context/ConsoleContext";
 import { laneLabel } from "../lib/lanes";
-import type { ApprovalStatus, Grounding } from "../types/contract";
+import { routeHref } from "../lib/route";
+import type { Grounding } from "../types/contract";
 import type { SkepticOutcome } from "../types/skeptic";
 
+/** Causal chain, Skeptic, and Judge. The human decision lives on Approvals, not here. */
 export function ReviewColumn() {
   const desk = useConsole();
-  const [tab, setTab] = useState<"chain" | "skeptic" | "judge" | "approval">("chain");
-  const [note, setNote] = useState(desk.approval.note ?? "");
-  const [noteError, setNoteError] = useState("");
+  const [tab, setTab] = useState<"chain" | "skeptic" | "judge">("chain");
   const judge = desk.answer.judge;
-  const action = desk.answer.playbook_actions?.[0];
-  const locked = desk.approval.status !== "pending";
   const recordedRows = desk.discharge.origin !== "live";
   const tabs = [
     ["chain", "Causal chain"],
     ["skeptic", "Skeptic"],
     ["judge", "Judge"],
-    ["approval", desk.approval.status === "pending" ? "Approval" : `Approval · ${desk.approval.status}`],
   ] as const;
 
   function onTabKey(event: KeyboardEvent<HTMLDivElement>) {
@@ -35,20 +32,6 @@ export function ReviewColumn() {
     document.getElementById(`tab-${id}`)?.focus();
   }
 
-  useEffect(() => {
-    setNote(desk.approval.note ?? "");
-    setNoteError("");
-  }, [desk.approval]);
-
-  function commit(status: ApprovalStatus) {
-    if ((status === "rejected" || status === "edited") && note.trim().length === 0) {
-      setNoteError(status === "rejected" ? "A note is required to reject." : "Add a note to record the edit.");
-      return;
-    }
-    setNoteError("");
-    desk.decide(status, note.trim());
-  }
-
   return (
     <section className="card review" aria-label="Review">
       <div className="card-head">
@@ -60,6 +43,12 @@ export function ReviewColumn() {
       <p className="note">
         Skeptic notes and Judge scores are fixtures for this screen. They are not a Nightshift call, and they do not
         choose a model lane. The human still decides. Nothing here is sent.
+      </p>
+      <p className="status-line">
+        Decision <strong>{desk.approval.status}</strong> ·{" "}
+        <a href={routeHref("insurer", "approvals")}>
+          {desk.approval.status === "pending" ? "Decide on Approvals" : "Open Approvals"}
+        </a>
       </p>
       <div className="review-tabs">
         <div className="tablist" role="tablist" aria-label="Review sections" onKeyDown={onTabKey}>
@@ -164,55 +153,6 @@ export function ReviewColumn() {
           </div>
         )}
         {tab === "judge" && !judge && <p className="note">This answer has no judge block.</p>}
-        {tab === "approval" && (
-          <div className="stack">
-            {action ? (
-              <>
-                <h3>{action.title}</h3>
-                <p>{action.detail}</p>
-                <p className="note">action_id {action.action_id}</p>
-              </>
-            ) : (
-              <p className="note">No playbook action on this answer.</p>
-            )}
-            <p className="status-line">
-              Status <strong>{desk.approval.status}</strong>
-              {judge ? ` · judge overall ${judge.overall_score.toFixed(2)}` : ""}
-            </p>
-            <label className="field">
-              Review note
-              <textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                rows={3}
-                disabled={locked}
-                placeholder="Required for edit or reject. Nothing is sent."
-              />
-            </label>
-            {noteError && (
-              <p className="error-text" role="alert">
-                {noteError}
-              </p>
-            )}
-            <div className="button-row">
-              <button type="button" className="button primary" disabled={locked} onClick={() => commit("approved")}>
-                Approve
-              </button>
-              <button type="button" className="button" disabled={locked} onClick={() => commit("edited")}>
-                Edit
-              </button>
-              <button type="button" className="button danger" disabled={locked} onClick={() => commit("rejected")}>
-                Reject
-              </button>
-              {locked && (
-                <button type="button" className="button ghost" onClick={desk.resetApproval}>
-                  Reset preview
-                </button>
-              )}
-            </div>
-            <p className="note">Local preview only. Approving does not send an outbound action and does not change the Judge scores.</p>
-          </div>
-        )}
       </div>
     </section>
   );
@@ -222,7 +162,7 @@ function OutcomeBadge({ outcome }: { outcome: SkepticOutcome }) {
   return <span className={`badge badge-${outcome}`}>{outcome}</span>;
 }
 
-function GroundingBadge({ grounding, score }: { grounding: Grounding; score: number }) {
+export function GroundingBadge({ grounding, score }: { grounding: Grounding; score: number }) {
   return (
     <span className={`badge badge-${grounding}`}>
       {grounding} {score.toFixed(2)}

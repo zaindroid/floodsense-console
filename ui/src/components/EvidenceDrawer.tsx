@@ -2,9 +2,10 @@ import { useEffect, useRef } from "react";
 import { SafeLink } from "./SafeLink";
 import { useConsole } from "../context/ConsoleContext";
 import { useDismiss } from "../hooks/useDismiss";
+import { numberedCitations } from "../lib/citations";
 import { formatCell, formatDay } from "../lib/format";
 import { glofasDischargeNote, pointById, provenanceForSource, rowAt, sourceExplanation } from "../lib/series";
-import type { Evidence } from "../types/contract";
+import type { Answer, Evidence } from "../types/contract";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -204,24 +205,7 @@ export function EvidenceDrawer() {
           </section>
           <section>
             <h3>Citations</h3>
-            <ul className="citation-list">
-              {desk.answer.citations.map((citation) => (
-                <li key={citation.citation_id}>
-                  <p className="menu-title">
-                    Layer {citation.layer} · {citation.title}
-                  </p>
-                  <p className="menu-body">{citation.quote}</p>
-                  <p className="note">
-                    {citation.publisher} · {citation.licence}
-                    <br />
-                    {citation.attribution}
-                  </p>
-                  <p className="note">
-                    <SafeLink href={citation.source_url}>{citation.source_url}</SafeLink>
-                  </p>
-                </li>
-              ))}
-            </ul>
+            <CitationList answer={desk.answer} />
           </section>
           <section>
             <h3>provenance view</h3>
@@ -243,7 +227,31 @@ export function EvidenceDrawer() {
   );
 }
 
-function ProvenanceList({
+/** Numbered in the answer's order, so [n] marks on a page match this list. */
+export function CitationList({ answer }: { answer: Answer }) {
+  return (
+    <ol className="citation-list">
+      {numberedCitations(answer).map(({ n, citation }) => (
+        <li key={citation.citation_id}>
+          <p className="menu-title">
+            [{n}] Layer {citation.layer} · {citation.title}
+          </p>
+          <p className="menu-body">{citation.quote}</p>
+          <p className="note">
+            {citation.publisher} · {citation.licence}
+            <br />
+            {citation.attribution}
+          </p>
+          <p className="note">
+            <SafeLink href={citation.source_url}>{citation.source_url}</SafeLink>
+          </p>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+export function ProvenanceList({
   row,
 }: {
   row: {

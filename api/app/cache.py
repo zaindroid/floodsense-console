@@ -135,6 +135,7 @@ def key_of(request: dict[str, Any], flags: str) -> tuple:
         request.get("customer_id") or DEFAULT_CUSTOMER,
         normalize_utc(request.get("replay_ts")),
         request.get("lang") or DEFAULT_LANG,
+        fold(str(request.get("doc_query") or "")),
         flags,
     )
 
@@ -236,13 +237,14 @@ def _event_of(source: dict[str, Any]) -> str:
 
 
 def ask_of(source: dict[str, Any]) -> tuple:
-    """Question, event, customer, clock and language, as replay compares them."""
+    """Question, event, customer, clock, language and doc_query, as replay compares them."""
     return (
         fold(question_text(source)),
         _event_of(source),
         _customer_of(source),
         clock_from(source),
         _lang_of(source),
+        fold(str(source.get("doc_query") or _request_of(source).get("doc_query") or "")),
     )
 
 

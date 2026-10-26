@@ -11,7 +11,7 @@ export function replayNotice(answer: Answer): Notice {
     tone: "info",
     read: false,
     title: "Replay on the insurer desk",
-    body: `The reviewed answer is a ${answer.served_from}. Its banner says ${serving.text}.`,
+    body: `The reviewed answer is a ${answer.served_from}, ${serving.kind === "cached" ? `${serving.text} UTC` : serving.text}. The top-bar chip has the detail.`,
   };
 }
 
