@@ -14,6 +14,11 @@ COPY contracts/ ./contracts/
 COPY ui/ ./ui/
 WORKDIR /build/ui
 ENV VITE_API_URL=/api
+# The 1500 ms default is tuned for an API in the same process. Ours reads a
+# warm snapshot in about a millisecond, but the first load after a deploy can
+# arrive before the snapshot does, and a desk on fixtures is worse than a desk
+# that waited. The documented override exists for exactly this.
+ENV VITE_API_TIMEOUT_MS=6000
 RUN npm run build
 
 # 2. the engines run TypeScript directly and have no runtime dependencies,

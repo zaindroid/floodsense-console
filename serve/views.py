@@ -13,6 +13,8 @@ desk presented as live.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -29,7 +31,12 @@ REST_URL = (os.environ.get("ZETARIS_REST_URL") or "").rstrip("/")
 API_KEY = os.environ.get("ZETARIS_API_KEY") or ""
 SCHEMA = os.environ.get("ZETARIS_SCHEMA") or "floodsense"
 ROW_LIMIT = int(os.environ.get("VIEWS_ROW_LIMIT", "5000"))
-TTL_S = float(os.environ.get("VIEWS_TTL_S", "120"))
+# The console aborts a view fetch after 1500 ms (API_TIMEOUT_MS_DEFAULT), which
+# no Zetaris round trip reliably beats. So a request is never allowed to wait on
+# the warehouse: a refresher keeps a snapshot warm and every request is served
+# from it. STALE_S bounds how long a snapshot may answer after a failed refresh.
+REFRESH_S = float(os.environ.get("VIEWS_REFRESH_S", "120"))
+STALE_S = float(os.environ.get("VIEWS_STALE_S", "900"))
 TIMEOUT_S = float(os.environ.get("VIEWS_TIMEOUT_S", "25"))
 
 app = FastAPI(title="FloodSense EU — views")
@@ -170,20 +177,14 @@ VIEWS: dict[str, tuple[str, Callable[[dict[str, Any]], dict[str, Any] | None]]] 
 }
 
 
-async def _serve(name: str) -> JSONResponse:
-    if not REST_URL or not API_KEY:
-        return JSONResponse({"detail": "no warehouse configured"}, status_code=503)
-
-    hit = _cache.get(name)
-    if hit and time.monotonic() - hit[0] < TTL_S:
-        return JSONResponse(hit[1])
-
+async def _load(name: str) -> list[dict[str, Any]] | None:
+    """Read one view and cast it. None when it cannot be used as it stands."""
     sql, cast = VIEWS[name]
     try:
         raw = await _rows(sql.format(s=SCHEMA))
     except (httpx.HTTPError, ValueError, KeyError) as e:
         log.warning("views %s unavailable: %s", name, str(e)[:160])
-        return JSONResponse({"detail": f"{name} unavailable"}, status_code=503)
+        return None
 
     rows = [cast(row) for row in raw]
     kept = [row for row in rows if row is not None]
@@ -191,12 +192,55 @@ async def _serve(name: str) -> JSONResponse:
         # The console drops the whole dataset on one bad row, so a partial
         # answer would show the fixture anyway while looking like a success.
         log.warning("views %s: %d of %d rows unusable", name, len(rows) - len(kept), len(rows))
-        return JSONResponse({"detail": f"{name} rows did not parse"}, status_code=503)
-    if not kept:
-        return JSONResponse({"detail": f"{name} is empty"}, status_code=503)
+        return None
+    return kept or None
 
-    _cache[name] = (time.monotonic(), kept)
-    return JSONResponse(kept)
+
+async def _refresh() -> None:
+    """Keep every view warm. Started once, runs for the life of the process."""
+    while True:
+        for name in VIEWS:
+            rows = await _load(name)
+            if rows is not None:
+                _cache[name] = (time.monotonic(), rows)
+        await asyncio.sleep(REFRESH_S)
+
+
+_task: asyncio.Task | None = None
+
+
+def start_refresher() -> None:
+    """Called by the parent app. A mounted sub-app gets no lifespan of its own:
+    Starlette runs startup and shutdown for the outermost app only."""
+    global _task
+    if _task is None and REST_URL and API_KEY:
+        _task = asyncio.create_task(_refresh())
+
+
+async def stop_refresher() -> None:
+    global _task
+    if _task is not None:
+        _task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await _task
+        _task = None
+
+
+async def _serve(name: str) -> JSONResponse:
+    if not REST_URL or not API_KEY:
+        return JSONResponse({"detail": "no warehouse configured"}, status_code=503)
+
+    hit = _cache.get(name)
+    if hit and time.monotonic() - hit[0] < STALE_S:
+        return JSONResponse(hit[1])
+
+    # Only before the first refresh has landed. After that the refresher owns
+    # the snapshot and this path is never the one the console waits on.
+    rows = await _load(name)
+    if rows is None:
+        return JSONResponse({"detail": f"{name} unavailable"}, status_code=503)
+    _cache[name] = (time.monotonic(), rows)
+    return JSONResponse(rows)
 
 
 @app.get("/discharge_daily")

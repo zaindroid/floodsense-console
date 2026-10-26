@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.main import app as api_app  # api/app/main.py, mirrored from main
-from serve.views import app as views_app
+from serve import views
 
 AGENTS_URL = os.environ.get("AGENTS_URL", "http://127.0.0.1:8100").rstrip("/")
 DIST = Path(os.environ.get("UI_DIST", "/srv/ui")).resolve()
@@ -58,8 +58,21 @@ def version() -> dict[str, str]:
 # Order matters, twice over. /api/views is claimed before /api, so the view
 # paths reach the warehouse instead of the team's API, which does not serve
 # them; and /api is claimed before the UI takes everything else.
-app.mount("/api/views", views_app)
+app.mount("/api/views", views.app)
 app.mount("/api", api_app)
+
+
+@app.on_event("startup")
+async def _warm_views() -> None:
+    """A mounted app has no lifespan of its own, so the warehouse snapshot is
+    started here. Without it the console's 1500 ms fetch would wait on Zetaris
+    and fall back to its fixtures."""
+    views.start_refresher()
+
+
+@app.on_event("shutdown")
+async def _stop_views() -> None:
+    await views.stop_refresher()
 
 if DIST.is_dir():
     # html=True serves index.html for a bare directory. The console routes on
