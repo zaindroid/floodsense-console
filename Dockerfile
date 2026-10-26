@@ -19,12 +19,14 @@ ENV VITE_API_URL=/api
 # arrive before the snapshot does, and a desk on fixtures is worse than a desk
 # that waited. The documented override exists for exactly this.
 ENV VITE_API_TIMEOUT_MS=6000
-# Ask FloodSense shows a recorded run rather than the fixture answer. This one
-# is ours: approved on this deployment against live Zetaris, three cited claims,
-# judge 1.0 with no flagged claim. Not a Nightshift run, because adoptReplay
-# refuses a run whose summary is empty and every model-backed run here returns
-# one -- the deterministic path fills it and the model path does not.
-ENV VITE_REPLAY_RUN_ID=919348cefb7c
+# Ask FloodSense shows a recorded run rather than the fixture answer. This is a
+# Nightshift run: approved on this deployment against live Zetaris, two claims,
+# both graded by Nemotron 3.5 Super VL. It is deliberately not swapped for an
+# older deterministic run that would display: adoptReplay refuses a run whose
+# summary is empty, every model-backed run returns one, and the panel then
+# falls back to the fixture without saying so. The deployment stays on the real
+# model so that failure is the one the team sees.
+ENV VITE_REPLAY_RUN_ID=74ef0c508578
 RUN npm run build
 
 # 2. the engines run TypeScript directly and have no runtime dependencies,
