@@ -37,6 +37,7 @@ GET  /runs/{id}/citations         citation records + evidence + provenance
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -86,7 +87,7 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
     # The UI reads the Zetaris query id and row metadata of /views from these headers.
-    expose_headers=["x-query-id", "x-schema", "x-executed-at", "x-dropped-rows", "x-truncated", "Retry-After"],
+    expose_headers=["x-query-id", "x-schema", "x-source", "x-executed-at", "x-dropped-rows", "x-truncated", "Retry-After"],
 )
 
 
@@ -208,12 +209,12 @@ async def _from_cache(body: dict) -> dict | None:
     flags = await _flag_fingerprint()
     if flags is None:
         return None
-    entry = cache.lookup(body, flags)
+    entry = await asyncio.to_thread(cache.lookup, body, flags)
     if entry is None:
         return None
     code, run = await _agents_json("GET", f"/runs/{entry.run_id}", timeout=_lookup_timeout())
     if code != 200 or not isinstance(run, dict):
-        cache.drop(entry.run_id)  # the agents no longer hold it
+        await asyncio.to_thread(cache.drop, entry.run_id, body, flags)  # the agents lost it
         return None
     age = int(time.time() - entry.stored_at)
     run["cache"] = {
@@ -287,7 +288,7 @@ async def _replay_for(
         return None
     replay = None if agents_down else await _replay_from_agents(body)
     if replay is None:
-        replay = cache.recording_for(body)
+        replay = await asyncio.to_thread(cache.recording_for, body)
     if replay is None:
         return None
     return annotate_replay(replay, reason, failed_run_id=failed_run_id)
@@ -300,7 +301,7 @@ async def config() -> Response:
         raise HTTPException(503, f"agents service unreachable at {AGENTS_URL}")
     if code != 200 or not isinstance(data, dict):
         return await _forward("GET", "/config")
-    data["api_cache"] = cache.stats()
+    data["api_cache"] = await asyncio.to_thread(cache.stats)
     return JSONResponse(data)
 
 
@@ -377,9 +378,18 @@ async def past_runs(limit: int = 50, thread_id: str | None = None) -> Response:
 
 
 @app.get("/views/{name}")
-async def get_view(name: str, event_id: str | None = None) -> Response:
-    """Rows of one contract view. Not cached, not rate limited."""
-    params = {"event_id": event_id} if event_id is not None else None
+async def get_view(name: str, event_id: str | None = None, source: str | None = None) -> Response:
+    """Rows of one contract view. Not cached, not rate limited.
+
+    source=replay asks for the event replay's schema (floodsense_seed for the Ahr);
+    the agents service validates it.
+    """
+    params: dict | None = {}
+    if event_id is not None:
+        params["event_id"] = event_id
+    if source is not None:
+        params["source"] = source
+    params = params or None
     try:
         r = await _agents_request("GET", f"/views/{name}", params=params)
     except httpx.HTTPError as e:
@@ -416,13 +426,13 @@ async def post_approval(run_id: str, request: Request) -> Response:
         if settings.semantic_cache:
             flags = await _flag_fingerprint()
             if flags is not None:
-                cache.remember(run, flags)
+                await asyncio.to_thread(cache.remember, run, flags)
         if settings.cached_replay and approved_by_a_person(run) and not is_follow_up(run):
             code, replay = await _agents_json(
                 "GET", f"/runs/{run_id}/replay", timeout=_lookup_timeout()
             )
             if code == 200 and isinstance(replay, dict):
-                cache.record(replay)
+                await asyncio.to_thread(cache.record, replay)
     return resp
 
 

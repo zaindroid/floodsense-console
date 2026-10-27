@@ -214,11 +214,7 @@ def bind_search(
     statement: str, vector: list[float], event_id: str | None, k: int
 ) -> tuple[str, dict]:
     """Bind $1, $2, and $3 by name. The statements reuse $1 and $2."""
-    sql = (
-        statement.replace("$1", "%(vector)s")
-        .replace("$2", "%(event_id)s")
-        .replace("$3", "%(k)s")
-    )
+    sql = statement.replace("$1", "%(vector)s").replace("$2", "%(event_id)s").replace("$3", "%(k)s")
     rendered = "[" + ",".join(str(item) for item in vector) + "]"
     return sql, {"vector": rendered, "event_id": event_id, "k": k}
 

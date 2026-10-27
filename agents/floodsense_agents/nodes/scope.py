@@ -27,6 +27,7 @@ import time
 
 from floodsense_agents.events import EVENTS, spec
 from floodsense_agents.governance import CONTRACT_VIEWS
+from floodsense_agents.live import resolve_mode
 from floodsense_agents.state import FloodState, trace
 
 # Words that look like places but are ours, or are grammar.
@@ -236,18 +237,30 @@ def check(question: str, event_id: str) -> dict:
 def make():
     def scope(state: FloodState) -> dict:
         t = time.time()
-        question = (state.get("request") or {}).get("question", "")
+        request = state.get("request") or {}
+        question = request.get("question", "")
         verdict = check(question, state["event_id"])
+        # Event replay or live hazard_now. Decided once, here, so every node
+        # and the run body read the same answer.
+        mode = resolve_mode(request)
+        note = f"; mode {mode['mode']}: {mode['reason']}"
+        if state.get("event_route"):
+            note += f"; event {state['event_id']}: {state['event_route']}"
+        ctx = {k: v for k, v in (request.get("context") or {}).items() if v}
+        if ctx:
+            note += "; context " + ", ".join(f"{k}={v}" for k, v in sorted(ctx.items()))
         if verdict["in_scope"]:
             return {
                 "scope": verdict,
+                "mode": mode,
                 "status": "running",
-                "trace": trace(state, "scope", verdict["reason"], lane="none", started=t),
+                "trace": trace(state, "scope", verdict["reason"] + note, lane="none", started=t),
             }
         # Declining costs one SQL query and no model call, which is the point:
         # the cheapest answer is the one we do not make up.
         return {
             "scope": verdict,
+            "mode": mode,
             "status": "out_of_scope",
             "summary": verdict["reason"],
             "claims": [],

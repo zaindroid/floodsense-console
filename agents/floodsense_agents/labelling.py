@@ -64,9 +64,7 @@ def computation_label(replay_ts: str | None, *, live: bool) -> tuple[str, str | 
     return REPLAY, now_utc()
 
 
-def reread_label(
-    cached_at: str | None, *, replay_ts: str | None
-) -> tuple[str, str | None]:
+def reread_label(cached_at: str | None, *, replay_ts: str | None) -> tuple[str, str | None]:
     """How to label a run that was computed earlier and is being read back.
 
     A clocked replay stays replay. The clock is the fact of the answer.

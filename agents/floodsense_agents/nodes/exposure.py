@@ -13,6 +13,7 @@ import time
 from decimal import Decimal, InvalidOperation
 
 from floodsense_agents.governance import IN_FOOTPRINT_SQL
+from floodsense_agents.live import focus, is_live, phrase_for_role
 from floodsense_agents.models import Claim, ExposedAsset, Exposure, Hypothesis, normalize_utc
 from floodsense_agents.nodes.investigator import cite
 from floodsense_agents.settings import settings
@@ -95,6 +96,15 @@ def make(deps: Deps):
             f"{IN_FOOTPRINT_SQL} AND lat BETWEEN {lat0} AND {lat1} "
             f"AND lon BETWEEN {lon0} AND {lon1}"
         )
+        live = is_live(state)
+        # Live mode has no forecast extent. The EMSR773 layer is the 2024
+        # observed extent, so it is used as a historical proxy and says so.
+        where_txt = (
+            f"the historical {ev['event_id']} flood footprint (2024 observed extent, "
+            f"a proxy, not a forecast extent)"
+            if live
+            else "the mapped footprint"
+        )
         published = normalize_utc(ev["footprint_published_utc"])
         clock_raw = state.get("replay_ts")
         clock = normalize_utc(clock_raw) if clock_raw else None
@@ -167,7 +177,7 @@ def make(deps: Deps):
                     hypothesis_id="H4",
                     citations=cite(cid, whole, prov, 1),
                     numbers=[policies, total],
-                    text=f"{policies} policies sit inside the mapped footprint, sum insured "
+                    text=f"{policies} policies sit inside {where_txt}, sum insured "
                     f"{_eur(total)} EUR; the largest is {assets[0].policy_id} "
                     f"({assets[0].segment}, {_eur(assets[0].sum_insured_eur)} EUR).",
                 )
@@ -185,7 +195,8 @@ def make(deps: Deps):
                         citations=cite(cid, agg, prov, 1),
                         numbers=[top["policies"], top["sum_insured_eur"]],
                         text=f"The most exposed segment is {top['segment']}: {top['policies']} "
-                        f"policies, {_eur(top['sum_insured_eur'])} EUR sum insured.",
+                        f"policies, {_eur(top['sum_insured_eur'])} EUR sum insured"
+                        + (" inside the historical footprint (proxy)." if live else "."),
                     )
                 )
                 new_ids.append(cid)
@@ -201,7 +212,11 @@ def make(deps: Deps):
         elif policies:
             # policies is the aggregate COUNT(*), not len(assets). rows_sample
             # is capped at 20, so the sample is not the portfolio.
-            statement = f"{policies} insured policies are exposed"
+            statement = (
+                f"{policies} insured policies sit inside the historical footprint (proxy)"
+                if live
+                else f"{policies} insured policies are exposed"
+            )
             rationale = f"deterministic join on exposure_join.{IN_FOOTPRINT_SQL}"
         else:
             statement = "No insured site in the footprint"
@@ -218,7 +233,14 @@ def make(deps: Deps):
                 rationale=rationale,
             )
         )
+        # Phrase the answer for who is asking (context.role). Exposure first for an insurer.
+        role = focus(state)["role"]
+        summary = state.get("summary") or ""
+        if role and not summary.startswith(("In plain words:", "Exposure:")):
+            cited = f" [{', '.join(new_ids)}]" if new_ids else ""
+            summary = phrase_for_role(summary, role, statement + cited)
         return {
+            "summary": summary,
             "exposure": exp.model_dump(),
             "claims": [c.model_dump() for c in claims],
             "hypotheses": [h.model_dump() for h in hyps],

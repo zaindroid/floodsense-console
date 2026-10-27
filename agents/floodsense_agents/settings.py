@@ -44,6 +44,28 @@ class Settings:
     model_fast: str = _env("MODEL_FAST", "meterless/fast")
     model_deep: str = _env("MODEL_DEEP", "meterless/deep")
     llm_timeout_s: float = float(_env("LLM_TIMEOUT_S", "180"))
+    # Attempts per call for transient errors (5xx, connection, bad JSON body).
+    # A read timeout is never retried: it already cost llm_timeout_s, and the
+    # node falls back to its deterministic path instead of waiting again.
+    llm_max_attempts: int = int(_env("LLM_MAX_ATTEMPTS", "2"))
+    # An error that arrives after this many seconds is not retried either
+    # (Nightshift's gateway answers 502 at ~45 s on long generations).
+    llm_slow_fail_s: float = float(_env("LLM_SLOW_FAIL_S", "20"))
+    # Stream chat completions (SSE) and assemble the reply. The gateway's
+    # 502 at ~45 s cuts a non-streamed request only: a stream gets its first
+    # bytes at once and runs to the end (measured 74-84 s, no 502).
+    llm_stream: bool = _flag("LLM_STREAM", True)
+    # Upper bound on completion tokens per lane. Nemotron on Nightshift counts
+    # its hidden reasoning here (2-4k tokens measured), so the cap is a
+    # runaway guard, not a length budget. 0 = send no max_tokens.
+    llm_max_tokens_fast: int = int(_env("LLM_MAX_TOKENS_FAST", "6000"))
+    llm_max_tokens_deep: int = int(_env("LLM_MAX_TOKENS_DEEP", "8000"))
+    # Concurrent model calls inside one node (Skeptic rationales, Judge
+    # grounding). Nightshift serves them in parallel; 1 = serial.
+    llm_max_parallel: int = int(_env("LLM_MAX_PARALLEL", "6"))
+    # Repair round only when the Judge did not pass the run. True restores
+    # the old behaviour (repair any flagged claim even on a passing run).
+    judge_repair_when_passing: bool = _flag("JUDGE_REPAIR_WHEN_PASSING", False)
     llm_mode: str = _env(
         "LLM_MODE", "auto"
     )  # auto | live | fake   (fake = deterministic offline model)

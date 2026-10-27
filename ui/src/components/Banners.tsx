@@ -15,12 +15,13 @@ export function ServingLine({ inline = false }: { inline?: boolean }) {
       className={`serving serving-${serving.kind}${inline ? " serving-inline" : ""}`}
       data-serving={serving.servedFrom}
       role={inline ? "status" : undefined}
+      title={`Original run ${serving.runId}`}
     >
       <strong>{serving.kind === "cached" ? `${serving.text} UTC` : serving.text}</strong>
       <span>
         {" "}
         · {servingQualifier(serving)}
-        {serving.kind === "live" ? "" : " · not live"} · original run {serving.runId}
+        {serving.kind === "live" ? "" : " · not live"}
       </span>
     </p>
   );
@@ -67,12 +68,16 @@ export function Colophon() {
   ].filter((row): row is ProvenanceRow => Boolean(row));
   return (
     <footer className="colophon">
+      <details>
+        <summary>Sources and licences</summary>
       {chosen.map((row) => (
         <p key={row.dataset}>
           {row.attribution} ({row.licence})
         </p>
       ))}
       <p>Portfolio rows are synthetic. Modelled discharge is not an official warning.</p>
+      <p>River gauges: PEGELONLINE (WSV), DL-DE-Zero-2.0, served through Zetaris. Map tiles: OpenStreetMap contributors (ODbL).</p>
+      </details>
     </footer>
   );
 }

@@ -27,6 +27,7 @@ OUTSIDE_FOOTPRINT_SQL = "in_footprint = FALSE"
 
 CONTRACT_VIEWS = (
     "hazard_timeline",
+    "hazard_now",
     "discharge_daily",
     "exposure_join",
     "gauge_levels",
@@ -47,6 +48,12 @@ class Owner:
 OWNERS: dict[str, Owner] = {
     "hazard_timeline": Owner(
         view="hazard_timeline",
+        owner="hazard data lead",
+        steward="ingestion",
+        releases="duty underwriter",
+    ),
+    "hazard_now": Owner(
+        view="hazard_now",
         owner="hazard data lead",
         steward="ingestion",
         releases="duty underwriter",
@@ -121,6 +128,25 @@ DEFINITIONS: dict[str, Definition] = {
         value=20,
         unit="mm/h",
         wording="rain was extreme (an hour >= 20 mm at a catchment point)",
+        used_by="skeptic",
+        owner="hazard data lead",
+    ),
+    # Hourly lines miss a long, steady storm: the Ahr 2021 ERA5 extract peaks at
+    # 5.6-18.5 mm/h but sums 45-108 mm on 14 Jul. A window total catches it.
+    # 50 mm is the order of DWD's "Unwetter" line for continuous rain.
+    "anomaly_rain_total": Definition(
+        term="anomaly_rain_total",
+        value=50,
+        unit="mm per event window",
+        wording="rain total over the window at or above 50 mm",
+        used_by="watchers",
+        owner="hazard data lead",
+    ),
+    "extreme_rain_total": Definition(
+        term="extreme_rain_total",
+        value=50,
+        unit="mm per event window",
+        wording="or the window's rain total >= 50 mm at a catchment point",
         used_by="skeptic",
         owner="hazard data lead",
     ),

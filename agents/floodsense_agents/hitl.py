@@ -18,7 +18,7 @@ from langgraph.types import interrupt
 
 from floodsense_agents.models import Approval, ApprovalDecision
 from floodsense_agents.settings import settings
-from floodsense_agents.state import FloodState, trace
+from floodsense_agents.state import FloodState, run_model_ids, trace
 from floodsense_agents.zetaris import now_utc
 
 
@@ -48,7 +48,7 @@ def approval_payload(state: FloodState) -> dict[str, Any]:
         "failures": state.get("failures", []),
         "served_from": state.get("served_from"),
         "cached_at": state.get("cached_at"),
-        "model_ids": state.get("model_ids", []),
+        "model_ids": run_model_ids(state.get("trace"), state.get("model_ids")),
     }
 
 

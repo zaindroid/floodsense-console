@@ -1,5 +1,6 @@
 import { ConsoleProvider } from "./context/ConsoleContext";
 import { AskFloodSense } from "./components/AskFloodSense";
+import { Colophon } from "./components/Banners";
 import { EvidenceDrawer } from "./components/EvidenceDrawer";
 import { Header } from "./components/Header";
 import { PageOutlet } from "./components/PageOutlet";
@@ -21,11 +22,15 @@ function Shell() {
     <div className="app-shell" data-nav={nav.collapsed ? "collapsed" : "open"}>
       <div className="shell-stage">
         <Header />
-        <SideNav collapsed={nav.collapsed} onToggle={nav.toggle} />
+        <SideNav collapsed={nav.collapsed} onToggle={nav.toggle} onNavigate={nav.closeIfDrawer} drawer={nav.drawer} />
+        {nav.drawer && !nav.collapsed && (
+          <button type="button" className="nav-backdrop" aria-label="Close pages" onClick={nav.close} />
+        )}
         <ReplayBar />
         <main id="content">
           <PageOutlet />
         </main>
+        <Colophon />
       </div>
       <AskFloodSense />
       <EvidenceDrawer />

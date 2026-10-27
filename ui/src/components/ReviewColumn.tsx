@@ -1,3 +1,4 @@
+import { plainLanguage } from "../lib/plain";
 import { useState, type KeyboardEvent } from "react";
 import { causalChain, skepticVerdicts } from "../fixtures/console";
 import { useConsole } from "../context/ConsoleContext";
@@ -89,7 +90,7 @@ export function ReviewColumn() {
                 <li key={link.id} className="step">
                   <p className="step-label">{link.label}</p>
                   <h3>{link.title}</h3>
-                  <p>{claim?.text}</p>
+                  <p title={claim?.text}>{plainLanguage(claim?.text ?? "")}</p>
                   <p className="note">{link.note}</p>
                   <div className="badge-row">
                     {verdict && <OutcomeBadge outcome={verdict.outcome} />}
@@ -112,7 +113,7 @@ export function ReviewColumn() {
               return (
                 <li key={verdict.claim_id} className="step">
                   <OutcomeBadge outcome={verdict.outcome} />
-                  <h3>{claim?.text}</h3>
+                  <h3 title={claim?.text}>{plainLanguage(claim?.text ?? "")}</h3>
                   <p>{verdict.counter_check}</p>
                 </li>
               );

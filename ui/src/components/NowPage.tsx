@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NEXT_48H_QUESTION } from "../api/ask";
 import { fetchGaugeLevels, fetchHazardNow, type HazardNowResult } from "../api/now";
 import { useConsole } from "../context/ConsoleContext";
 import { latestPastStamp, relativeTime, sparkSeries, summariseAll, type GaugeLevelRow, type PointNow, type Trend } from "../lib/now";
@@ -33,7 +34,7 @@ const TREND_TEXT: Record<Trend, { arrow: string; label: string }> = {
 
 /** Live hourly view of the eight Valencia points. Its own fetch; never falls back to the replay fixture. */
 export function NowPage() {
-  const { points } = useConsole();
+  const { points, openAsk } = useConsole();
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [gauges, setGauges] = useState<Gauges>({ state: "loading" });
   const [clock, setClock] = useState(() => Date.now());
@@ -100,9 +101,14 @@ export function NowPage() {
             </p>
           )}
         </div>
-        <button type="button" className="now-refresh" onClick={refresh}>
-          Refresh
-        </button>
+        <div className="button-row">
+          <button type="button" className="now-refresh" onClick={() => openAsk(NEXT_48H_QUESTION)}>
+            Ask about the next 48 hours
+          </button>
+          <button type="button" className="now-refresh" onClick={refresh}>
+            Refresh
+          </button>
+        </div>
       </header>
       <p className="now-note">{MODEL_NOTE}. Dashed line and “forecast” values are model forecasts.</p>
 

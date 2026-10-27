@@ -23,6 +23,22 @@ export interface ReplayStep {
   seq: number;
   node: string;
   summary: string;
+  /** Trace extras for the pipeline view. Absent on old bodies. */
+  lane?: string | null;
+  modelId?: string | null;
+  latencyMs?: number | null;
+  evidenceIds?: string[];
+  /** Provider that served this step, when the trace says (e.g. "nightshift"). */
+  provider?: string | null;
+}
+
+/** Judge verdict for one claim (body.judge[]). */
+export interface ReplayJudgeClaim {
+  claimId: string;
+  grounding: string | null;
+  score: number | null;
+  rationale: string | null;
+  modelId: string | null;
 }
 
 /** A recorded agent run, read from GET /runs/{id}/replay. Always a replay, never live. */
@@ -41,6 +57,17 @@ export interface RecordedRun {
   status: string | null;
   threadId: string | null;
   modelIds: string[];
+  /** The agents' effective mode (body.mode.mode): live reads hazard_now, event replays the event window. */
+  mode: "live" | "event" | null;
+  eventId: string | null;
+  /** Pipeline extras. Zero / empty when the body does not carry them. */
+  reviseRounds?: number;
+  repairRounds?: number;
+  judgeClaims?: ReplayJudgeClaim[];
+  docQuery?: string | null;
+  memoryCount?: number;
+  /** Run-level LLM provider from the body or its request, when stated. */
+  provider?: string | null;
 }
 
 const str = (value: unknown): string | null => (typeof value === "string" && value.length > 0 ? value : null);
@@ -96,7 +123,22 @@ export function adoptRunBody(run: Record<string, unknown>, runId: string): Recor
     ? run.trace.flatMap((raw) => {
         const step = rec(raw);
         const node = step && str(step.node);
-        return step && node ? [{ seq: num(step.seq) ?? 0, node, summary: str(step.summary) ?? "" }] : [];
+        return step && node
+          ? [
+              {
+                seq: num(step.seq) ?? 0,
+                node,
+                summary: str(step.summary) ?? "",
+                lane: str(step.lane),
+                provider: str(step.provider) ?? str(step.llm_provider),
+                modelId: str(step.model_id),
+                latencyMs: num(step.latency_ms),
+                evidenceIds: Array.isArray(step.evidence_ids)
+                  ? step.evidence_ids.filter((e): e is string => typeof e === "string")
+                  : [],
+              },
+            ]
+          : [];
       })
     : [];
   const id = str(run.run_id) ?? runId;
@@ -118,7 +160,28 @@ export function adoptRunBody(run: Record<string, unknown>, runId: string): Recor
     status: str(run.status),
     threadId: str(run.thread_id),
     modelIds: Array.isArray(run.model_ids) ? run.model_ids.filter((m): m is string => typeof m === "string") : [],
+    mode: modeOf(run.mode),
+    eventId: str(run.event_id),
+    reviseRounds: num(run.revise_rounds) ?? 0,
+    repairRounds: num(run.repair_rounds) ?? 0,
+    judgeClaims: Array.isArray(run.judge)
+      ? run.judge.flatMap((raw) => {
+          const j = rec(raw);
+          const claimId = j && str(j.claim_id);
+          return j && claimId
+            ? [{ claimId, grounding: str(j.grounding), score: num(j.score), rationale: str(j.rationale), modelId: str(j.model_id) }]
+            : [];
+        })
+      : [],
+    docQuery: str(rec(run.request)?.doc_query),
+    memoryCount: Array.isArray(run.memories) ? run.memories.length : 0,
+    provider: str(run.llm_provider) ?? str(run.provider) ?? str(rec(run.request)?.llm_provider),
   };
+}
+
+function modeOf(value: unknown): "live" | "event" | null {
+  const m = rec(value)?.mode ?? value;
+  return m === "live" || m === "event" ? m : null;
 }
 
 /** VITE_REPLAY_RUN_ID, or null when unset. */

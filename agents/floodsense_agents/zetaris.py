@@ -27,12 +27,12 @@ import re
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol, Sequence
 
 import httpx
 
-from floodsense_agents.events import EVENTS
+from floodsense_agents.events import EVENTS, VALENCIA_POINT_IDS
 from floodsense_agents.models import Evidence
 from floodsense_agents.settings import settings
 
@@ -79,7 +79,9 @@ def _view_of(sql: str) -> str:
 _BOUND = re.compile(r"^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|\d{4}-\d{2}-\d{2})$")
 
 
-def inline_bound(sql: str, params: tuple[str, ...] | list[str] | None) -> tuple[str, tuple[str, ...]]:
+def inline_bound(
+    sql: str, params: tuple[str, ...] | list[str] | None
+) -> tuple[str, tuple[str, ...]]:
     """Split a statement into the placeholder form and a rendered copy.
 
     SQLite runs the placeholder form with the tuple. The live SQL API has no
@@ -303,11 +305,13 @@ class ZetarisClient:
 # column is boolean, so the predicate is `= TRUE`, not `= 1`.
 _DDL = """
 CREATE TABLE {s}.hazard_timeline(point_id TEXT, ts_utc TEXT, rain_mm REAL, discharge_m3s REAL, warning_level TEXT);
+CREATE TABLE {s}.hazard_now(point_id TEXT, ts_utc TEXT, rain_mm REAL, discharge_m3s REAL, warning_level TEXT, horizon TEXT);
 CREATE TABLE {s}.discharge_daily(point_id TEXT, date TEXT, discharge_m3s REAL, source TEXT);
 CREATE TABLE {s}.exposure_join(policy_id TEXT, site_id TEXT, lat REAL, lon REAL, in_footprint INTEGER, sum_insured_eur REAL, segment TEXT);
 CREATE TABLE {s}.gauge_levels(station TEXT, water TEXT, ts_utc TEXT, level_cm REAL, source TEXT);
 CREATE TABLE {s}.provenance(dataset TEXT, source_url TEXT, publisher TEXT, licence TEXT, attribution TEXT, fetched_at TEXT);
 """
+
 
 def _gauge_seed_rows() -> list[tuple]:
     """One row per station on each event that lists gauges. level_cm stays empty.
@@ -362,6 +366,8 @@ _SEED = {
     ]
     + [(_VAL_RIVER, "2024-10-29T19:11:00Z", None, None, "es-alert")]
     + [
+        # 13:00: the rain was under way before 14:00, so a 15:00 replay sees two hours.
+        (_AHR_RAIN, "2021-07-14T13:00:00Z", 12.0, None, None),
         (_AHR_RAIN, "2021-07-14T14:00:00Z", 38.0, None, "3"),
         (_AHR_RAIN, "2021-07-14T16:00:00Z", 61.0, None, "4"),
         (_AHR_RAIN, "2021-07-14T18:00:00Z", 43.0, None, "4"),
@@ -442,6 +448,14 @@ _SEED = {
             "2026-10-22",
         ),
         (
+            "hazard_now",
+            "https://open-meteo.com/en/docs/flood-api",
+            "Open-Meteo / GloFAS",
+            "CC BY 4.0",
+            "Weather data by Open-Meteo.com",
+            "2026-10-22",
+        ),
+        (
             "gauge_levels",
             "https://www.pegelonline.wsv.de/",
             "Wasserstrassen- und Schifffahrtsverwaltung des Bundes (WSV)",
@@ -451,6 +465,29 @@ _SEED = {
         ),
     ],
 }
+
+
+def live_hazard_rows(now: datetime | None = None) -> list[tuple]:
+    """floodsense.hazard_now in the fake: 72 past hours and 48 forecast hours.
+
+    Generated against the clock at construction, like the rolling warehouse view
+    (migration 042). Paiporta (VAL01) crosses the 100 m3/s anomaly line in the
+    forecast, peaking at 180 m3/s 20 h out; Chiva (VAL07) has a 34 mm forecast
+    hour 18 h out. Every other point stays quiet. warning_level is NULL, as in 042.
+    """
+    base = (now or datetime.now(timezone.utc)).replace(minute=0, second=0, microsecond=0)
+    rows: list[tuple] = []
+    for pid in VALENCIA_POINT_IDS:
+        for h in range(-71, 49):
+            ts = (base + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            horizon = "forecast" if h > 0 else "past"
+            rain, flow = 0.2, 4.0
+            if pid == "VAL01":
+                flow = 4.0 if h < 12 else max(4.0, 180.0 - 20.0 * abs(h - 20))
+            if pid == "VAL07" and 14 <= h <= 21:
+                rain = (34.0 - 6.0 * abs(h - 18)) if abs(h - 18) <= 3 else 2.0
+            rows.append((pid, ts, rain, flow, None, horizon))
+    return rows
 
 
 class FakeZetaris:
@@ -464,6 +501,17 @@ class FakeZetaris:
             for table, rows in _SEED.items():
                 self._conn.executemany(
                     f"INSERT INTO {schema}.{table} VALUES ({','.join('?' * len(rows[0]))})", rows
+                )
+            # The seed twin (040) is the frozen window labelled replay. Only the
+            # live schema has a past and a forecast.
+            if schema == "floodsense":
+                self._conn.executemany(
+                    f"INSERT INTO {schema}.hazard_now VALUES (?,?,?,?,?,?)", live_hazard_rows()
+                )
+            else:
+                self._conn.execute(
+                    f"INSERT INTO {schema}.hazard_now SELECT point_id, ts_utc, rain_mm, "
+                    f"discharge_m3s, warning_level, 'replay' FROM {schema}.hazard_timeline"
                 )
         self._conn.commit()
 

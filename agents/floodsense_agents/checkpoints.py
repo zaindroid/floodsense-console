@@ -60,22 +60,16 @@ class _LockedSaver(BaseCheckpointSaver):
         limit: int | None = None,
     ) -> Iterator[Any]:
         with self._lock:
-            rows = tuple(
-                self._inner.list(config, filter=filter, before=before, limit=limit)
-            )
+            rows = tuple(self._inner.list(config, filter=filter, before=before, limit=limit))
         return iter(rows)
 
     def put(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
         with self._lock:
             return self._inner.put(config, checkpoint, metadata, new_versions)
 
-    def put_writes(
-        self, config: Any, writes: Any, task_id: str, task_path: str = ""
-    ) -> None:
+    def put_writes(self, config: Any, writes: Any, task_id: str, task_path: str = "") -> None:
         with self._lock:
-            return self._inner.put_writes(
-                config, writes, task_id, task_path=task_path
-            )
+            return self._inner.put_writes(config, writes, task_id, task_path=task_path)
 
     def delete_thread(self, thread_id: str) -> None:
         with self._lock:

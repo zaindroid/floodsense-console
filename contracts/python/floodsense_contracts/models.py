@@ -92,9 +92,15 @@ class Evidence(ContractModel):
     executed_at_utc: str = Field(pattern=DATE_TIME)
 
 
+class DroppedNumber(ContractModel):
+    value: float
+    reason: str = Field(min_length=1)
+
+
 class Claim(ContractModel):
     claim_id: str
     text: str
+    numbers_dropped: list[DroppedNumber] | None = None
 
 
 class JudgeClaim(ContractModel):
@@ -105,6 +111,7 @@ class JudgeClaim(ContractModel):
     score: float = Field(ge=0, le=1)
     rationale: str
     model_id: ModelId
+    numbers_dropped: list[DroppedNumber] | None = None
 
 
 class Judge(ContractModel):

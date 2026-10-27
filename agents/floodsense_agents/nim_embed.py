@@ -24,9 +24,7 @@ class EmbedError(Exception):
 def cache_path(root: Path, input_type: str, text: str) -> Path:
     _check_input_type(input_type)
     digest = hashlib.sha256(text.encode()).hexdigest()
-    return (
-        root / "corpus" / ".embed-cache" / MODEL / "2048" / input_type / f"{digest}.json"
-    )
+    return root / "corpus" / ".embed-cache" / MODEL / "2048" / input_type / f"{digest}.json"
 
 
 def embed_texts(

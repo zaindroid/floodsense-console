@@ -41,6 +41,24 @@ def memory_on(deps: Deps) -> bool:
     return settings.ff_hmem and type(deps.memory) is not NoMemory
 
 
+def _same_event(memories: list[dict[str, Any]], event_id: str | None) -> list[dict[str, Any]]:
+    """Drop findings tagged with another event.
+
+    An Ahr replay recalled Valencia's "VAL03 reached 471 m3/s" and "91 policies
+    in the footprint"; the Investigator then reasoned with them. Untagged
+    memories stay.
+    """
+    if not event_id:
+        return memories
+    out = []
+    for m in memories:
+        tags = [t for t in (m.get("tags") or []) if isinstance(t, str) and t.startswith("event:")]
+        if tags and f"event:{event_id}" not in tags:
+            continue
+        out.append(m)
+    return out
+
+
 def recalling(node: Node, deps: Deps) -> Node:
     """Recall past approved findings, then run the Investigator with them in state."""
 
@@ -57,7 +75,9 @@ def recalling(node: Node, deps: Deps) -> Node:
         memories: list[dict[str, Any]] = []
         if long_term:
             try:
-                memories = list(deps.memory.recall(state.get("request") or {}))
+                memories = _same_event(
+                    list(deps.memory.recall(state.get("request") or {})), state.get("event_id")
+                )
                 notes.append(
                     f"recalled {len(memories)} past approved finding(s) for the Investigator"
                 )

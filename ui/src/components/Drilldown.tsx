@@ -69,7 +69,7 @@ export function Drilldown() {
       )}
       {twins.length > 0 && row && (
         <p className="note">
-          Same discharge_m3s as {twins.join(", ")} on this date.
+          Same river flow as {twins.join(", ")} on this date.
           {prefersGlofasGridNote(row.source)
             ? " Open-Meteo snaps neighbouring points onto one 0.05° cell, so the match is the grid, not two gauges."
             : ""}

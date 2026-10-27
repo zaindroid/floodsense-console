@@ -138,7 +138,21 @@
       "required": ["claim_id", "text"],
       "properties": {
         "claim_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "text": { "type": "string", "minLength": 1 }
+        "text": { "type": "string", "minLength": 1 },
+        "numbers_dropped": { "$ref": "#/$defs/numbers_dropped" }
+      }
+    },
+    "numbers_dropped": {
+      "type": "array",
+      "description": "Optional, for audit: numbers the Investigator set aside as not results, each with why (date, named line, query filter).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["value", "reason"],
+        "properties": {
+          "value": { "type": "number" },
+          "reason": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "judge_claim": {
@@ -159,6 +173,7 @@
         "grounding": { "enum": ["supported", "partial", "unsupported"] },
         "citation_faithful": { "type": "boolean" },
         "numbers_match": { "type": "boolean" },
+        "numbers_dropped": { "$ref": "#/$defs/numbers_dropped" },
         "score": { "type": "number", "minimum": 0, "maximum": 1 },
         "rationale": { "type": "string", "minLength": 1 },
         "model_id": {

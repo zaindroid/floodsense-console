@@ -66,6 +66,7 @@ class FloodState(TypedDict, total=False):
     # extra
     request: dict[str, Any]  # RunRequest
     event: dict[str, Any]  # EventSpec
+    event_route: str  # why this event: events.route_event reason
     evidence: dict[str, dict[str, Any]]  # query_id -> Evidence
     provenance: list[dict[str, Any]]  # rows of the provenance view (layer b)
     claims: list[dict[str, Any]]  # Claim[]
@@ -75,6 +76,8 @@ class FloodState(TypedDict, total=False):
     judge_summary: dict[str, Any]  # JudgeSummary
     revise_rounds: int
     repair_rounds: int
+    live_findings: dict[str, Any]  # live mode: what the Investigator found crossing
+    mode: dict[str, Any]  # live.resolve_mode: {mode event|live, explicit, reason}
     scope: dict[str, Any]  # the gate's verdict: can this run honestly answer
     status: str  # running | awaiting_approval | approved | rejected | failed
     served_from: str  # live | cache | replay. live only for a fresh live-schema read
@@ -106,6 +109,24 @@ def trace(
         evidence_ids=evidence_ids or [],
     )
     return [*prev, ev.model_dump()]
+
+
+def run_model_ids(trace_events: list[dict] | None, recorded: list[str] | None = None) -> list[str]:
+    """Every model that answered an LLM node of the run, in node order, once each.
+
+    Read from the trace, so the Skeptic, the Judge and the repair round count
+    too (nodes used to append only the Investigator's and the Playbook's id,
+    and a fallback appended "deterministic"). The Judge records "a,b" when
+    several models scored. With no model answer at all, the recorded list is
+    returned deduplicated.
+    """
+    out: list[str] = []
+    for ev in trace_events or []:
+        for m in str(ev.get("model_id") or "").split(","):
+            m = m.strip()
+            if m and m != "deterministic" and m not in out:
+                out.append(m)
+    return out or list(dict.fromkeys(recorded or []))
 
 
 def answered(*items: Evidence) -> bool:

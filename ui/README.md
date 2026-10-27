@@ -62,6 +62,39 @@ The alert control steps 28–31 Oct 2024 and adds a notice if modelled discharge
 
 The citizen page uses the same points, dates, and discharge series, in plain language, without the review controls.
 
+### Look and citizen Overview
+
+Colours, type, and cards follow the team's mock UI (`Hackathon-Monorepo-mock-ui`); the tokens are at the top of `src/styles/global.css`. Citizen Overview asks "Is my area at risk, and why?": place search and chips, a Risk right now card (discharge band and m³/s for the replay date, the answer's serving label, and the Judge overall score as 0.00–1.00, as on the other pages; there is no separate risk score), three numbered Why sentences with numbered source chips, What should I do (approved steps only), a river-gauge map, and gauge cards. Table and column names in claim text are reworded by `src/lib/plain.ts` on citizen and insurer pages; the original sentence stays under Technical detail or in the hover text. The answer serving line appears once, in the replay strip. Sources and licences are one collapsed footer. Under 760px the nav is a drawer (backdrop, Escape, closes after a pick) and the header is two rows.
+
+### Agent pipeline and document retrieval
+
+`src/components/AgentPipeline.tsx` (model: `src/lib/pipeline.ts`) draws any run body (live, cache or replay) as Scope → Watchers → Memory → Investigator ⇄ Skeptic → Exposure → Playbook → Judge → Human approval. Each node shows its status, the summed trace `latency_ms`, its lane, how many times it ran, and the trace summary. The revise loop appears when `revise_rounds` > 0 and the repair loop when `repair_rounds` > 0. Badges:
+
+- "Zetaris · N queryIds" on SQL-lane steps.
+- "Nightshift · …" only when the step's `provider` or the run's `request.llm_provider` is `nightshift`. Any other nvidia id is "NVIDIA Nemotron · …", and every other id is shown as stored.
+- "H-MEM recall · N" only when the memory step recalled at least one finding.
+- "World Model" with the last board (H1 supported / not_supported …).
+- "pgvector + Zetaris JDBC" when layer (c) citations exist.
+
+The reveal is CSS and stops under `prefers-reduced-motion`. `src/components/RetrievalPanel.tsx` (model: `src/lib/retrieval.ts`) shows the layer (c) query, the passages per claim (title, page, publisher, licence, quote, attribution), the Zetaris query id that hydrated them, and the Judge's verdict, including "Flagged by Judge". Both views appear in the Ask popup under "How I got this". On insurer Review they form the "Causal chain" header, which reads `VITE_REPLAY_RUN_ID` or, failing that, the bundled recording `src/fixtures/run_f16733274f1c.json`. That header carries a "Recorded run · not live" badge and a note that says when it fell back to the bundled recording. Claim C2 in that recording is a known degenerate agent output and is shown as recorded.
+
+### Disaster replay
+
+Page `replay` on both desks, right after Now. Two events:
+
+- Ahr valley, 13–16 Jul 2021 (EMSR517). The page reads `GET /views/hazard_timeline?event_id=EMSR517&source=replay` (Zetaris `floodsense_seed`, migrations 051/052, even when `FF_LIVE_DATA` points the app at the live views) and uses the result when it holds AHR points inside the window, badged "Replay · Zetaris floodsense_seed · not live". Otherwise it uses `src/fixtures/ahr_2021.json`, badged "Bundled modelled data (Open-Meteo, CC BY 4.0), not from Zetaris". `VITE_AHR_SOURCE=fixture` forces the fixture. The fixture holds Open-Meteo Flood API (GloFAS v4 daily discharge) and Historical Weather API (ERA5 hourly precipitation) data for Altenahr, Bad Neuenahr-Ahrweiler and an upper-Ahr point, fetched 2026-10-27, CC BY 4.0 Open-Meteo.com, modelled values.
+- Valencia, 28–31 Oct 2024 (EMSR773), from the loaded `hazard_timeline` rows.
+
+The page has an hourly scrubber, day buttons and Play/Pause. Under reduced motion Play steps once a second, and the time readout is not announced while playing. Each point shows its rain and discharge at the scrubbed time. Because GloFAS discharge is daily, a crossing of the 100 m³/s Watchers line is dated by day ("Crossed the line on 14 Jul 2021 (daily value)"), never by hour. "Ask the agents about this moment" opens Ask pre-filled and sends `context` {page, event_id, replay_date, point_id, place}. Everything is labelled "Replay of … · not live".
+
+### Ask screen context
+
+Every Ask request carries `context` from `screenContext()` in ConsoleContext (role, page, selected point and place), merged with a page's own context. It is added only by `withAskContext` (`src/lib/askContext.ts`); `VITE_ASK_CONTEXT=off` stops sending it. The agents' `RunRequest` ignores unknown fields (pydantic default).
+
+### River-gauge map
+
+`GET {VITE_API_URL}/views/gauge_levels` (Zetaris `floodsense.gauge_levels`, PEGELONLINE Rhine/Mosel gauges). The browser never calls PEGELONLINE. Numbers sent as strings are coerced. Markers sit at the view's `lat`/`lon` (fallback: `STATION_POSITIONS` in `src/lib/gauges.ts`), coloured by `band` (below, near, above, unknown = No threshold). Cards show level, `trend_cm_h` as rising/steady/falling, MW and MHW, and the measured time. Each row's origin comes from `source`: a seed, fixture or replay stamp is labelled Seed or Fixture (dashed marker), never Live. A row with `is_stale` true (or missing) is labelled Stale. Live appears only for a live-source, fresh row, and the map chip says Live only when every gauge is. The view is re-read every 5 minutes; a failed or empty read is retried, not cached. An empty or unreachable view says "No live gauge readings yet". No sample gauges are drawn. Tiles: OpenStreetMap via Leaflet.
+
 ## Fixture and live
 
 On load the screen paints the fixtures, then checks the API.

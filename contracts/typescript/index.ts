@@ -66,9 +66,16 @@ export interface Evidence {
   executed_at_utc: string;
 }
 
+/** A number set aside as not a result: date part, named line, or query filter. */
+export interface DroppedNumber {
+  value: number;
+  reason: string;
+}
+
 export interface Claim {
   claim_id: string;
   text: string;
+  numbers_dropped?: DroppedNumber[];
 }
 
 export interface JudgeClaim {
@@ -80,6 +87,7 @@ export interface JudgeClaim {
   score: number;
   rationale: string;
   model_id: ModelId;
+  numbers_dropped?: DroppedNumber[];
 }
 
 export interface Judge {

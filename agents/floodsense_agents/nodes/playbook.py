@@ -19,8 +19,8 @@ import time
 from floodsense_agents.models import Claim, Evidence, PlaybookAction
 from floodsense_agents.nightshift import parse_json
 from floodsense_agents.nodes.investigator import numbers_in
+from floodsense_agents.nodes.judge import needs_repair
 from floodsense_agents.prompts import PLAYBOOK, REPAIR, rows_block
-from floodsense_agents.settings import settings
 from floodsense_agents.state import Deps, FloodState, trace
 
 log = logging.getLogger("floodsense.playbook")
@@ -77,32 +77,53 @@ def _deterministic(state: FloodState) -> list[PlaybookAction]:
     ]
 
 
+MAX_ACTIONS = 4  # the prompt asks for at most 4; more are cut, not shown
+TOP_ASSETS = 5  # largest exposed sites shown to the model
+
+
+def _prompt(state: FloodState) -> str:
+    """The Playbook's user prompt, compact so the call fits the Nightshift gateway.
+
+    The chain, one line per claim, and the exposure as totals, segments and
+    the largest sites only: the full asset list is what made the prompt large.
+    """
+    exp = state.get("exposure") or {}
+    assets = sorted(
+        (a for a in exp.get("assets") or [] if isinstance(a, dict)),
+        key=lambda a: -float(a.get("sum_insured_eur") or 0),
+    )[:TOP_ASSETS]
+    hyps = "\n".join(
+        f"{h['id']} {h['link']} [{h.get('status', 'proposed')}]: {h['statement']}"
+        for h in state["hypotheses"]
+    )
+    return (
+        f"CHAIN: {state.get('summary')}\nHYPOTHESES:\n{hyps}\nCLAIMS:\n"
+        + "\n".join(f"{c['claim_id']}: {c['text']}" for c in state["claims"])
+        + f"\nEXPOSURE: {exp.get('policies', 0)} policies, sum insured "
+        f"{float(exp.get('sum_insured_eur') or 0):.0f} EUR; by segment "
+        f"{(exp.get('by_segment') or [])[:8]}; largest sites "
+        f"{[{k: a.get(k) for k in ('policy_id', 'segment', 'sum_insured_eur') if k in a} for a in assets]}"
+    )
+
+
 def make(deps: Deps):
     def playbook(state: FloodState) -> dict:
         t = time.time()
-        js_sum = state.get("judge_summary") or {}
         # S6: this used to stop at 1 while the Judge routed back while
         # repair_rounds < JUDGE_REPAIR_ROUNDS. With the knob at 2 the two
         # disagreed and the graph hit its recursion limit. One bound, read
         # from the same setting.
-        if js_sum.get("flagged_claim_ids") and (
-            state.get("repair_rounds", 0) < settings.judge_repair_rounds
-        ):
+        if needs_repair(state):
             return _repair(state, deps, t)
         actions = _deterministic(state)
         model_id = "deterministic"
         lane = "none"
         uncited = 0
         try:
-            user = (
-                f"CHAIN: {state.get('summary')}\nHYPOTHESES: "
-                f"{[(h['id'], h['link'], h['status'], h['statement']) for h in state['hypotheses']]}\n"
-                f"CLAIMS:\n"
-                + "\n".join(f"{c['claim_id']}: {c['text']}" for c in state["claims"])
-                + f"\nEXPOSURE: {state.get('exposure')}"
-            )
             text, model_id = deps.llm.complete(
-                "fast", PLAYBOOK.replace("{lang}", state["request"].get("lang", "en")), user
+                "fast",
+                PLAYBOOK.replace("{lang}", state["request"].get("lang", "en")),
+                _prompt(state),
             )
             js = parse_json(text)
             ids = {c["claim_id"] for c in state["claims"]}
@@ -114,7 +135,7 @@ def make(deps: Deps):
                     claim_ids=[i for i in a.get("claim_ids", []) if i in ids],
                     outbound=bool(a.get("outbound", False)),
                 )
-                for a in js.get("actions", [])
+                for a in js.get("actions", [])[:MAX_ACTIONS]
             ]
             # An action that cites nothing (or only claim ids this run does not
             # have) rests on no evidence. It is dropped rather than shown.

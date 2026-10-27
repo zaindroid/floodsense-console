@@ -28,12 +28,23 @@ answer as another's. Follow-ups (a request that carries thread_id) are not
 replayed. Lookups use CACHE_LOOKUP_TIMEOUT_S, not the long run timeout, and
 an unreachable agents service is answered from the recording kept here.
 
-The cache lives in this process. REDIS_URL is not read yet; a restart empties
-the cache but not the recordings in the agents' checkpointer.
+Storage. With REDIS_URL set and reachable, cache entries and recordings are
+also written to Redis (JSON values, SET EX; keys floodsense:cache:v1:<sha256>
+and floodsense:replay:v1:<sha256>). Entries expire with their TTL, recordings
+after REPLAY_RECORDING_TTL_S (30 days), so the replay fallback outlives a day.
+Lookups read Redis first and fall through to the in-process store on a miss,
+so entries made while Redis was down still answer. The in-process store is a
+bounded LRU (CACHE_MAX_ENTRIES, REPLAY_MAX_RECORDINGS); its evictions do not
+touch Redis. When REDIS_URL is unset, or a Redis call fails or takes longer
+than CACHE_LOOKUP_TIMEOUT_S, the in-process store answers: logged once,
+retried after REDIS_RETRY_S, never a failed request.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import os
 import re
 import threading
@@ -41,6 +52,13 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger("floodsense.api.cache")
+
+CACHE_PREFIX = "floodsense:cache:v1:"
+REPLAY_PREFIX = "floodsense:replay:v1:"
+REDIS_RETRY_S = 30.0
+REDIS_SOCKET_TIMEOUT_S = 0.5
 
 # Mirrors RunRequest's defaults in agents/floodsense_agents/models.py, so a
 # request that leaves them out keys the same as one that spells them out.
@@ -61,6 +79,48 @@ _UTC_LOOSE = re.compile(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?Z?
 _UTC_CANON = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
+# Copy of agents/floodsense_agents/live.py LIVE_PATTERNS. A request with no
+# mode keys on the mode the agents will resolve, so a live answer is never
+# served for an event question or the other way round. Change both together.
+_LIVE_PATTERNS: tuple[str, ...] = (
+    r"now",
+    r"right now",
+    r"currently",
+    r"today",
+    r"tonight",
+    r"tomorrow",
+    r"this week",
+    r"next \d+ ?(?:h|hours?|days?)",
+    r"next (?:few )?(?:hours?|days?)",
+    r"coming (?:hours?|days?)",
+    # Spanish
+    r"ahora",
+    r"hoy",
+    r"ma(?:ñ|n)ana",
+    r"pr(?:ó|o)xim[ao]s \d+ ?(?:h|horas?)",
+    # German. "Guten Morgen" is a greeting, not tomorrow.
+    r"jetzt",
+    r"heute",
+    r"(?<!guten )morgen",
+    r"n(?:ä|a)chsten \d+ ?(?:h|stunden)",
+)
+# A question that names the past is an event question, whatever else it says.
+_EVENT_PATTERNS: tuple[str, ...] = (
+    r"(?:19\d{2}|20(?:[01]\d|2[0-4]))",  # a year up to 2024
+    r"\d{4}-\d{2}-\d{2}",  # an explicit date
+    r"\d{1,2}\.? (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic|"
+    r"okt|dez|mai|juli?|juni?|m(?:ä|a)r)\w*",
+    r"emsr\d*",
+    r"on that day",
+)
+_EVENT_RE = re.compile(
+    "|".join(rf"\b(?:{p})\b" for p in _EVENT_PATTERNS), re.IGNORECASE | re.UNICODE
+)
+_LIVE_RE = re.compile(
+    "|".join(rf"\b(?:{p})\b" for p in _LIVE_PATTERNS), re.IGNORECASE | re.UNICODE
+)
+
+
 def _flag(name: str, default: bool) -> bool:
     v = os.environ.get(name)
     return default if v in (None, "") else v.strip().lower() in ("1", "true", "yes", "on")
@@ -78,6 +138,10 @@ class CacheSettings:
     )
     max_entries: int = field(
         default_factory=lambda: int(os.environ.get("CACHE_MAX_ENTRIES") or 256)
+    )
+    # Recordings in Redis. Long, so the labelled replay outlives a cache entry.
+    recording_ttl_s: float = field(
+        default_factory=lambda: float(os.environ.get("REPLAY_RECORDING_TTL_S") or 2592000)
     )
     max_recordings: int = field(
         default_factory=lambda: int(os.environ.get("REPLAY_MAX_RECORDINGS") or 8)
@@ -128,8 +192,40 @@ def fingerprint(config: dict[str, Any]) -> str:
     return ";".join(parts)
 
 
+def mode_of(source: dict[str, Any]) -> str:
+    """event or live, as the agents resolve it (agents/floodsense_agents/live.py).
+
+    A run body carries the resolved mode; a request carries at most the
+    explicit one, and otherwise the question decides.
+    """
+    resolved = source.get("mode")
+    if isinstance(resolved, dict) and resolved.get("mode") in ("event", "live"):
+        return resolved["mode"]
+    request = _request_of(source)
+    if clock_from(source):
+        return "event"
+    explicit = resolved if resolved in ("event", "live") else request.get("mode")
+    if explicit in ("event", "live"):
+        return explicit
+    question = question_text(source)
+    if _EVENT_RE.search(question):
+        return "event"
+    return "live" if _LIVE_RE.search(question) else "event"
+
+
+def recorded_mode(run: dict[str, Any]) -> str:
+    """The mode a recorded run answered in. A run from before live mode has none: event."""
+    resolved = run.get("mode")
+    if isinstance(resolved, dict) and resolved.get("mode") in ("event", "live"):
+        return resolved["mode"]
+    if resolved in ("event", "live"):
+        return resolved
+    return "event"
+
+
 def key_of(request: dict[str, Any], flags: str) -> tuple:
     return (
+        mode_of(request),
         fold(str(request.get("question") or "")),
         request.get("event_id") or DEFAULT_EVENT,
         request.get("customer_id") or DEFAULT_CUSTOMER,
@@ -137,6 +233,7 @@ def key_of(request: dict[str, Any], flags: str) -> tuple:
         request.get("lang") or DEFAULT_LANG,
         fold(str(request.get("doc_query") or "")),
         _provider_of(request),
+        _context_of(request),
         flags,
     )
 
@@ -241,12 +338,30 @@ def _customer_of(source: dict[str, Any]) -> str:
 
 
 def _event_of(source: dict[str, Any]) -> str:
-    return canonical_event(source.get("event_id") or _request_of(source).get("event_id"))
+    # The request's event first: a run routed to EMSR517 by its question still
+    # answers the ask that sent EMSR773 (agents events.route_event).
+    # A run's own event_id may be the routed one; its request is what was asked.
+    request = source.get("request")
+    # A request that carries the key (every RunRequest dump does) decides, even as None.
+    if isinstance(request, dict) and "event_id" in request:
+        return canonical_event(request.get("event_id"))
+    return canonical_event(source.get("event_id"))
+
+
+def _context_of(source: dict[str, Any]) -> tuple:
+    """What the user was looking at, so a cached answer never crosses places or roles."""
+    ctx = source.get("context")
+    if not isinstance(ctx, dict):
+        ctx = _request_of(source).get("context")
+    if not isinstance(ctx, dict):
+        return ()
+    return tuple(sorted((str(k), str(v)) for k, v in ctx.items() if v not in (None, "")))
 
 
 def ask_of(source: dict[str, Any]) -> tuple:
     """Question, event, customer, clock, language, doc_query and LLM provider, as replay compares them."""
     return (
+        mode_of(source),
         fold(question_text(source)),
         _event_of(source),
         _customer_of(source),
@@ -254,12 +369,13 @@ def ask_of(source: dict[str, Any]) -> tuple:
         _lang_of(source),
         fold(str(source.get("doc_query") or _request_of(source).get("doc_query") or "")),
         _provider_of(source),
+        _context_of(source),
     )
 
 
 def same_ask(request: dict[str, Any], run: dict[str, Any]) -> bool:
     """True when the run answered this question, event, customer, clock and language."""
-    return ask_of(request) == ask_of(run)
+    return ask_of(request) == (recorded_mode(run), *ask_of(run)[1:])
 
 
 def past_row_matches(request: dict[str, Any], row: dict[str, Any]) -> bool:
@@ -286,6 +402,9 @@ def past_row_matches(request: dict[str, Any], row: dict[str, Any]) -> bool:
     if fold(str(row.get("question") or "")) != fold(str(request.get("question") or "")):
         return False
     if normalize_utc(row.get("replay_ts")) != normalize_utc(request.get("replay_ts")):
+        return False
+    # A row without a mode predates live mode, so it answered the event window.
+    if recorded_mode(row) != mode_of(request):
         return False
     row_lang = row.get("lang")
     if row_lang not in (None, "") and str(row_lang) != (request.get("lang") or DEFAULT_LANG):
@@ -318,11 +437,105 @@ class Entry:
     ttl_s: float
 
 
-class AnswerCache:
-    """Process-local cache of finished runs, plus the last few recordings for replay."""
+def _slot(prefix: str, key: tuple) -> str:
+    """Redis key for a cache or replay tuple. Hashed, so the question is not in the key."""
+    raw = json.dumps(list(key), ensure_ascii=False, default=str)
+    return prefix + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def __init__(self, settings: CacheSettings | None = None) -> None:
+
+def _client_from_env(timeout_s: float):
+    """A redis client for REDIS_URL, or None when unset or the package is missing."""
+    url = (os.environ.get("REDIS_URL") or "").strip()
+    if not url:
+        return None
+    try:
+        import redis  # noqa: PLC0415
+    except ImportError:
+        log.warning("REDIS_URL is set but the redis package is missing; cache stays in memory")
+        return None
+    t = max(0.05, min(REDIS_SOCKET_TIMEOUT_S, timeout_s))
+    return redis.Redis.from_url(
+        url, socket_timeout=t, socket_connect_timeout=t, retry_on_timeout=False
+    )
+
+
+class _RedisStore:
+    """Thin wrapper. A failed or slow call marks Redis down for REDIS_RETRY_S."""
+
+    def __init__(self, client, slow_s: float) -> None:
+        self.client = client
+        self.slow_s = slow_s
+        self._down_until = 0.0
+        self._warned = False
+
+    @property
+    def up(self) -> bool:
+        return time.monotonic() >= self._down_until
+
+    def _fail(self, why: Any) -> None:
+        self._down_until = time.monotonic() + REDIS_RETRY_S
+        if not self._warned:
+            log.warning("Redis unavailable (%s); serving the cache from memory", why)
+            self._warned = True
+
+    def call(self, fn, default=None):
+        if not self.up:
+            return default
+        started = time.monotonic()
+        try:
+            out = fn(self.client)
+        except Exception as exc:  # noqa: BLE001 - any Redis failure falls back
+            self._fail(exc)
+            return default
+        took = time.monotonic() - started
+        if took > self.slow_s:
+            self._fail(f"call took {took:.2f}s")
+            return out
+        if self._warned:
+            log.info("Redis reachable again; cache back on Redis")
+            self._warned = False
+        return out
+
+    def set_json(self, key: str, value: dict[str, Any], ttl_s: float) -> bool:
+        data = json.dumps(value, ensure_ascii=False, default=str)
+        ex = max(1, int(-(-ttl_s // 1)))  # ceil, at least a second
+        return bool(self.call(lambda c: c.set(key, data, ex=ex), False))
+
+    def get_json(self, key: str) -> tuple[bool, dict[str, Any] | None]:
+        """(answered, value). answered is False when Redis did not answer."""
+        sentinel = object()
+        raw = self.call(lambda c: c.get(key), sentinel)
+        if raw is sentinel:
+            return False, None
+        if raw is None:
+            return True, None
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return True, None
+        return True, value if isinstance(value, dict) else None
+
+    def delete(self, *keys: str) -> None:
+        if keys:
+            self.call(lambda c: c.delete(*keys))
+
+
+class AnswerCache:
+    """Cache of finished runs, plus the last few recordings for replay.
+
+    In process, with Redis behind it when REDIS_URL is set (module docstring).
+    The methods are blocking; async handlers call them through asyncio.to_thread.
+    """
+
+    def __init__(self, settings: CacheSettings | None = None, redis_client: Any = None) -> None:
         self.settings = settings or CacheSettings()
+        if redis_client is None:
+            redis_client = _client_from_env(self.settings.lookup_timeout_s)
+        self._redis = (
+            _RedisStore(redis_client, self.settings.lookup_timeout_s)
+            if redis_client is not None
+            else None
+        )
         self._lock = threading.Lock()
         self._entries: OrderedDict[tuple, Entry] = OrderedDict()
         self._recordings: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
@@ -359,8 +572,19 @@ class AnswerCache:
     # ---------------------------------------------------------------- cache
 
     def ttl_for(self, request: dict[str, Any], flags: str) -> float:
+        # A live-mode answer reads a rolling window, so it ages like live data
+        # whatever the schema flag says.
         live_data = "FF_LIVE_DATA=True" in flags.split(";") and not request.get("replay_ts")
-        return self.settings.ttl_live_s if live_data else self.settings.ttl_replay_s
+        live = live_data or mode_of(request) == "live"
+        return self.settings.ttl_live_s if live else self.settings.ttl_replay_s
+
+    def _write_entry(self, key: tuple, entry: Entry, ttl_s: float) -> None:
+        if self._redis is not None:
+            self._redis.set_json(
+                _slot(CACHE_PREFIX, key),
+                {"run_id": entry.run_id, "stored_at": entry.stored_at, "ttl_s": entry.ttl_s},
+                ttl_s,
+            )
 
     def remember(self, run: dict[str, Any], flags: str) -> bool:
         """Cache a finished run. False when it does not qualify."""
@@ -373,13 +597,11 @@ class AnswerCache:
             self._entries[key] = entry
             self._entries.move_to_end(key)
             while len(self._entries) > self.settings.max_entries:
-                self._entries.popitem(last=False)
+                self._entries.popitem(last=False)  # Redis keeps it until its TTL
+        self._write_entry(key, entry, entry.ttl_s)
         return True
 
-    def lookup(self, request: dict[str, Any], flags: str) -> Entry | None:
-        if request.get("thread_id"):
-            return None
-        key = key_of(request, flags)
+    def _memory_entry(self, key: tuple) -> Entry | None:
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
@@ -389,10 +611,38 @@ class AnswerCache:
                 return None
             return entry
 
-    def drop(self, run_id: str) -> None:
+    def lookup(self, request: dict[str, Any], flags: str) -> Entry | None:
+        if request.get("thread_id"):
+            return None
+        key = key_of(request, flags)
+        if self._redis is not None:
+            answered, value = self._redis.get_json(_slot(CACHE_PREFIX, key))
+            if answered and value is not None:
+                try:
+                    found = Entry(
+                        str(value["run_id"]), float(value["stored_at"]), float(value["ttl_s"])
+                    )
+                except (TypeError, KeyError, ValueError):
+                    found = None
+                if found is not None and time.time() - found.stored_at <= found.ttl_s:
+                    return found
+            entry = self._memory_entry(key)
+            if entry is not None and answered:
+                # Written while Redis was down, or Redis lost it: put it back.
+                left = entry.ttl_s - (time.time() - entry.stored_at)
+                self._write_entry(key, entry, left)
+            return entry
+        return self._memory_entry(key)
+
+    def drop(
+        self, run_id: str, request: dict[str, Any] | None = None, flags: str | None = None
+    ) -> None:
+        """Forget a run. In Redis only the slot of the request that found it is deleted."""
         with self._lock:
             for key in [k for k, e in self._entries.items() if e.run_id == run_id]:
                 del self._entries[key]
+        if self._redis is not None and request is not None and flags is not None:
+            self._redis.delete(_slot(CACHE_PREFIX, key_of(request, flags)))
 
     # ------------------------------------------------------------ recordings
 
@@ -404,22 +654,41 @@ class AnswerCache:
             self._recordings[slot] = stored
             self._recordings.move_to_end(slot)
             while len(self._recordings) > self.settings.max_recordings:
-                self._recordings.popitem(last=False)
+                self._recordings.popitem(last=False)  # Redis keeps it until its TTL
+        if self._redis is not None:
+            self._redis.set_json(
+                _slot(REPLAY_PREFIX, slot), stored, self.settings.recording_ttl_s
+            )
 
     def recording_for(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """The recording of this question, event, customer, clock and language."""
+        slot = ask_of(request)
+        if self._redis is not None:
+            _, value = self._redis.get_json(_slot(REPLAY_PREFIX, slot))
+            if value is not None:
+                return value
         with self._lock:
-            body = self._recordings.get(ask_of(request))
+            body = self._recordings.get(slot)
             return dict(body) if body else None
 
+    def backend(self) -> str:
+        """redis while Redis answers a ping, memory otherwise."""
+        if self._redis is None or not self._redis.up:
+            return "memory"
+        return "redis" if self._redis.call(lambda c: c.ping(), False) else "memory"
+
     def stats(self) -> dict[str, Any]:
+        """Flags, backend and this process's counts. No Redis scan."""
+        backend = self.backend()
         with self._lock:
             return {
                 "FF_SEMANTIC_CACHE": self.settings.semantic_cache,
                 "FF_CACHED_REPLAY": self.settings.cached_replay,
+                "backend": backend,
                 "entries": len(self._entries),
                 "recordings": len(self._recordings),
                 "ttl_live_s": self.settings.ttl_live_s,
                 "ttl_replay_s": self.settings.ttl_replay_s,
+                "recording_ttl_s": self.settings.recording_ttl_s,
                 "lookup_timeout_s": self.settings.lookup_timeout_s,
             }

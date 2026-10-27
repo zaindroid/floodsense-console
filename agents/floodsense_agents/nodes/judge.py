@@ -25,7 +25,7 @@ import math
 import time
 
 from floodsense_agents.models import Citation, Claim, Evidence, JudgeScore, JudgeSummary
-from floodsense_agents.nightshift import parse_json
+from floodsense_agents.nightshift import map_ordered, parse_json
 from floodsense_agents.prompts import JUDGE, rows_block
 from floodsense_agents.settings import settings
 from floodsense_agents.state import Deps, FloodState, trace
@@ -60,6 +60,24 @@ def _values(evs: list[Evidence]) -> list[float]:
                 if len(col) == len(e.rows_sample) and col:
                     vals.append(float(sum(col)))
     return vals
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def asserted_excerpt(text: str) -> str:
+    """The quoted excerpt a document claim asserts ("..." in its text), whitespace-normalised."""
+    import re
+
+    m = re.search(r"[\"\u201c](.+?)[\"\u201d]", text or "", re.S)
+    return _norm(m.group(1)) if m else ""
+
+
+def _quote_numbers(text: str) -> list[float]:
+    from floodsense_agents.nodes.investigator import numbers_in
+
+    return numbers_in(text)
 
 
 def _match(n: float, vals: list[float]) -> bool:
@@ -101,14 +119,35 @@ def score_claim(c: Claim, evidence: dict[str, Evidence], deps: Deps | None) -> J
     a = [evidence[x.query_id] for x in c.citations if x.layer == "a" and x.query_id in evidence]
     coverage = len(c.citations) > 0
     faithful = bool(a) and all(e.row_count > 0 and not e.error for e in a)
-    for x in c.citations:
-        if x.layer == "c" and x.quote and x.content_sha256:
+    docs = [x for x in c.citations if x.layer == "c" and x.quote and x.content_sha256]
+    # Document-only: no layer-(a) citation at all. A claim whose layer-(a) query
+    # ids are missing from the evidence is not document-only; it is unsupported.
+    doc_only = bool(docs) and not any(x.layer == "a" for x in c.citations)
+    if doc_only:
+        # Faithful only when every quote verifies against its chunk and at least one
+        # verified quote contains what the claim asserts (its quoted excerpt).
+        verified = [x for x in docs if layer_c_matches_passage(x, evidence)]
+        asserted = asserted_excerpt(c.text)
+        faithful = (
+            len(verified) == len(docs)
+            and bool(asserted)
+            and any(asserted in _norm(x.quote or "") for x in verified)
+        )
+    else:
+        for x in docs:
             faithful = faithful and layer_c_matches_passage(x, evidence)
     licence_ok = all(
         not (x.storage == "pointer" and x.quote and len(x.quote) > 400) for x in c.citations
     )
     vals = _values(a)
-    numbers_match = all(_match(n, vals) for n in c.numbers) if a else not c.numbers
+    if doc_only:
+        # Numbers of a document claim are checked against its quotes.
+        vals = [v for x in docs for v in _quote_numbers(x.quote or "")]
+    numbers_match = all(_match(n, vals) for n in c.numbers) if (a or doc_only) else not c.numbers
+    if not c.numbers and c.numbers_dropped:
+        # Every stated number was set aside as a date part, a line or a filter:
+        # nothing was checked against the rows, so this is unverified, not a pass.
+        numbers_match = False
     grounding, rationale, model_id = None, "", "deterministic"
     if deps is not None and a:
         try:
@@ -175,7 +214,8 @@ def evaluate(
             flagged_claim_ids=[],
             model_id="deterministic",
         )
-    scores = [score_claim(c, evidence, deps) for c in claims]
+    # One grounding call per claim, concurrently; scores keep claim order.
+    scores = map_ordered(lambda c: score_claim(c, evidence, deps), claims)
     n = len(scores)
     with_numbers = [s for s, c in zip(scores, claims) if c.numbers]
     h = sum(1 for s in scores if s.grounding == "unsupported") / n
@@ -230,14 +270,22 @@ def make(deps: Deps):
     return judge
 
 
-def route_after_judge(state: FloodState) -> str:
+def needs_repair(state: FloodState) -> bool:
+    """Flagged claims, a repair round left, and (unless configured) a failing run.
+
+    The Judge router and the Playbook both read this, so they never disagree.
+    A run that already passes goes to the human with its flags shown.
+    """
     rep = state.get("judge_summary") or {}
-    if (
-        rep.get("flagged_claim_ids")
-        and state.get("repair_rounds", 0) < settings.judge_repair_rounds
-    ):
-        return "repair"
-    return "hitl"
+    if not rep.get("flagged_claim_ids"):
+        return False
+    if state.get("repair_rounds", 0) >= settings.judge_repair_rounds:
+        return False
+    return settings.judge_repair_when_passing or not rep.get("passes")
+
+
+def route_after_judge(state: FloodState) -> str:
+    return "repair" if needs_repair(state) else "hitl"
 
 
 # kept for the skeleton's import surface

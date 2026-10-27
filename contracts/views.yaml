@@ -4,13 +4,13 @@
 # scripts/tests/test_migration_contract.py reads "  <view>:" and "- {name: ..., type: ...}".
 
 views:
-  # min_rows: 136 (live and seed; 8 points, 2024-10-20 through 2024-11-05)
+  # min_rows: live 136 (8 points, 2024-10-20 through 2024-11-05), seed 180 (051: those 136 plus 44 Ahr rows, AHR01-AHR04, 2021-07-10 through 2021-07-20)
   discharge_daily:
     - {name: point_id, type: string}
     - {name: date, type: date}
     - {name: discharge_m3s, type: double}
     - {name: source, type: string}
-  # min_rows: live 3264, seed 576
+  # min_rows: live 3264, seed 960 (052: 576 Valencia plus 384 Ahr rows, AHR01-AHR04 hourly 2021-07-13 through 2021-07-16)
   hazard_timeline:
     - {name: point_id, type: string}
     - {name: ts_utc, type: timestamp}
@@ -34,6 +34,19 @@ views:
     - {name: ts_utc, type: timestamp}
     - {name: level_cm, type: double}
     - {name: source, type: string}
+    - {name: river_km, type: double}
+    - {name: lat, type: double}
+    - {name: lon, type: double}
+    - {name: trend_cm_h, type: double}
+    - {name: mnw_cm, type: double}
+    - {name: mw_cm, type: double}
+    - {name: mhw_cm, type: double}
+    - {name: hhw_cm, type: double}
+    - {name: hsw_cm, type: double}
+    - {name: band, type: string}
+    - {name: fetched_at, type: timestamp}
+    # is_stale: fetched_at missing or older than 30 min (live); always true in seed.
+    - {name: is_stale, type: boolean}
   # min_rows: 359 (live and seed). synthetic is the portfolio flag (yes). Not a live book.
   # Migration 018 is the column list verify checks once it is applied. 014 and 016 create the view first.
   exposure_join:

@@ -1,6 +1,7 @@
 import { apiBaseUrl } from "./config";
 import { adoptRunBody, type RecordedRun } from "./replay";
 import type { LlmProvider } from "../lib/llmProvider";
+import { withAskContext, type AskContext } from "../lib/askContext";
 
 export const DEFAULT_EVENT_ID = "EMSR773";
 
@@ -11,6 +12,27 @@ export interface AskInput {
   /** Providers GET /config listed. The provider is sent only when it is one of them. */
   allowedProviders: readonly string[];
   threadId?: string | null;
+  /** "live" reads hazard_now (past days and the next 48 h). Unset lets the agents classify the question. */
+  mode?: AskMode;
+  /** Screen context (role, page, point, replay moment). Sent as `context` only through withAskContext. */
+  context?: AskContext | null;
+}
+
+export type AskMode = "live" | "event";
+
+/** Pure: the mode a question asked from this page carries. A Now page asks about now; elsewhere the agents decide. */
+export function modeForPage(page: string | null | undefined): AskMode | undefined {
+  return page === "now" ? "live" : undefined;
+}
+
+/** The question the Now page pre-fills. Not sent until the reader presses Send. */
+export const NEXT_48H_QUESTION = "Is any Valencia point at risk in the next 48 hours?";
+
+/** Pure: the answer header line for the run's effective mode. Null when the body does not say. */
+export function modeLabel(run: Pick<RecordedRun, "mode" | "eventId">): string | null {
+  if (run.mode === "live") return "Live data · next 48 h";
+  if (run.mode === "event") return `Event · ${run.eventId ?? DEFAULT_EVENT_ID} replay`;
+  return null;
 }
 
 const THREAD_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -29,16 +51,19 @@ export function capTurns<T>(turns: T[], max = MAX_TURNS): T[] {
 }
 
 /** Pure: the POST /runs body. */
-export function buildRunRequest(input: AskInput): Record<string, string> {
+export function buildRunRequest(input: AskInput): Record<string, unknown> {
   const question = input.question.trim();
   const body: Record<string, string> = {
     question,
-    event_id: input.eventId || DEFAULT_EVENT_ID,
     doc_query: question,
   };
+  // No event_id unless the page has one: the agents route an unset event by the
+  // question (Rhine, Köln, Ahr -> EMSR517) and default to EMSR773 otherwise.
+  if (input.eventId) body.event_id = input.eventId;
   if (input.allowedProviders.includes(input.provider)) body.llm_provider = input.provider;
   if (input.threadId) body.thread_id = input.threadId;
-  return body;
+  if (input.mode) body.mode = input.mode;
+  return withAskContext(body, input.context);
 }
 
 export type AskResult =

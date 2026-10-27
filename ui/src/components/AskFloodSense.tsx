@@ -1,5 +1,8 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { askFloodSense, capTurns, DEFAULT_EVENT_ID, followUpThreadId, runBadge } from "../api/ask";
+import { AgentPipeline } from "./AgentPipeline";
+import { RetrievalPanel } from "./RetrievalPanel";
+import { mergeContext } from "../lib/askContext";
+import { askFloodSense, capTurns, followUpThreadId, modeForPage, modeLabel, runBadge } from "../api/ask";
 import { fetchRecordedRun, replayRunId, type RecordedRun } from "../api/replay";
 import { useConsole } from "../context/ConsoleContext";
 import { citationMarks, citationsForClaim, numberedCitations } from "../lib/citations";
@@ -24,7 +27,9 @@ interface Turn {
  */
 export function AskFloodSense() {
   const desk = useConsole();
-  const { answer, askOpen, closeAsk, evidenceOpen, llmProvider, llmProviders } = desk;
+  const { answer, askOpen, askPrefill, clearAskPrefill, closeAsk, evidenceOpen, llmProvider, llmProviders, page } = desk;
+  // agents-visual: screen context (and a replay moment, when the popup was opened from Replay).
+  const { askContext, screenContext } = desk;
   const panelId = useId();
   const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
@@ -71,6 +76,13 @@ export function AskFloodSense() {
   draftRef.current = draft;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => () => inflightRef.current?.abort(), []);
+  // A pre-filled question (the Now page's button) lands in the composer and waits for Send.
+  useEffect(() => {
+    if (!askOpen || askPrefill === null) return;
+    setDraft(askPrefill);
+    clearAskPrefill();
+    textareaRef.current?.focus();
+  }, [askOpen, askPrefill, clearAskPrefill]);
   useEffect(() => {
     if (!pending) return;
     const tick = () => setElapsed(Math.floor((Date.now() - pending.started) / 1000));
@@ -103,10 +115,12 @@ export function AskFloodSense() {
     const result = await askFloodSense(
       {
         question,
-        eventId: DEFAULT_EVENT_ID,
         provider: llmProvider,
         allowedProviders: llmProviders,
         threadId: followUpThreadId(previous),
+        mode: modeForPage(page),
+        context: mergeContext(screenContext(), askContext),
+        ...(askContext?.event_id ? { eventId: askContext.event_id } : {}),
       },
       controller.signal,
     );
@@ -197,6 +211,11 @@ export function AskFloodSense() {
                   {badge} · {when}
                 </p>
               )}
+              <div className="segmented segmented--small ask-modes" role="group" aria-label="Answer mode">
+                <span className="segmented__option is-active" title="Answers are grounded in retrieved, cited sources">
+                  With retrieval
+                </span>
+              </div>
             </div>
             <button ref={closeRef} type="button" className="icon-button" aria-label="Close Ask FloodSense" onClick={dismiss}>
               <CloseIcon />
@@ -340,6 +359,7 @@ function RecordedAnswer({ run, badge }: { run: RecordedRun; badge: string }) {
   return (
     <>
       <p className={`ask-badge ask-badge-${kind}`}>{badge}</p>
+      {modeLabel(run) && <p className="note ask-mode">{modeLabel(run)}</p>}
       {run.servedFrom !== "live" && run.label !== badge && <p className="note">{run.label}</p>}
       {run.status === "awaiting_approval" && (
         <p className="note ask-approval">
@@ -390,14 +410,9 @@ function RecordedAnswer({ run, badge }: { run: RecordedRun; badge: string }) {
       )}
       <details className="disclosure">
         <summary>How I got this</summary>
-        <ol className="ask-trace">
-          {run.trace.map((step, i) => (
-            <li key={`${step.seq}-${i}`}>
-              <p className="menu-title">{step.node}</p>
-              <p className="note">{step.summary}</p>
-            </li>
-          ))}
-        </ol>
+        {/* agents-visual: the node graph and the layer (c) retrieval, from the same run body. */}
+        <AgentPipeline run={run} compact />
+        <RetrievalPanel run={run} />
         <p className="note">Trace recorded with run {run.runId}.</p>
       </details>
     </>

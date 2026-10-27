@@ -14,11 +14,12 @@ from langgraph.types import Command
 
 from floodsense_agents import labelling
 from floodsense_agents.checkpoints import build_checkpointer
-from floodsense_agents.events import spec
+from floodsense_agents.events import route_event, spec
 from floodsense_agents.graph import build_deps, build_graph
 from floodsense_agents.hitl import approval_payload
 from floodsense_agents.models import ApprovalDecision, RunRequest
 from floodsense_agents.nightshift import current_provider
+from floodsense_agents.state import run_model_ids
 from floodsense_agents.zetaris import now_utc
 
 log = logging.getLogger("floodsense.runtime")
@@ -50,6 +51,8 @@ STATE_KEYS = (
     "revise_rounds",
     "repair_rounds",
     "scope",
+    "mode",
+    "live_findings",
     "model_ids",
     "error",
 )
@@ -121,6 +124,7 @@ class Runtime:
             ("provenance", []),
         ):
             out[k] = out[k] if out[k] is not None else empty
+        out["model_ids"] = run_model_ids(out["trace"], out["model_ids"])
         out["approval"] = out["approval"] or {
             "status": "awaiting" if paused else "not_reached",
             "decision": None,
@@ -128,9 +132,7 @@ class Runtime:
             "reviewer_note": None,
         }
         out["status"] = "awaiting_approval" if paused else v.get("status", "running")
-        kind, at = labelling.computation_label(
-            v.get("replay_ts"), live=self._answers_are_live()
-        )
+        kind, at = labelling.computation_label(v.get("replay_ts"), live=self._answers_are_live())
         # A clocked replay stays replay. A stored "cache" mark must not hide
         # the clock on the way out of the checkpointer.
         stored = v.get("served_from")
@@ -183,6 +185,7 @@ class Runtime:
             event_id=snap.get("event_id"),
             customer_id=snap.get("customer_id"),
             replay_ts=snap.get("replay_ts"),
+            mode=(snap.get("mode") or {}).get("mode"),
             updated_at=now,
             judge_overall=(snap.get("judge_summary") or {}).get("overall"),
             approval=(snap.get("approval") or {}).get("status"),
@@ -216,7 +219,11 @@ class Runtime:
 
     def start(self, req: RunRequest) -> dict[str, Any]:
         run_id = uuid.uuid4().hex[:12]
-        ev = spec(req.event_id)
+        # A Rhine / Köln / Ahr question on the default event runs on EMSR517.
+        routed, route_why = route_event(
+            req.question, req.event_id, req.context.model_dump() if req.context else None
+        )
+        ev = spec(routed)
         thread_id = req.thread_id or run_id
         turns = self.thread(req.thread_id) if req.thread_id else []
         served_from, cached_at = labelling.computation_label(
@@ -230,6 +237,7 @@ class Runtime:
                     "thread_id": thread_id,
                     "thread": turns,
                     "event_id": ev.event_id,
+                    "event_route": route_why,
                     "customer_id": req.customer_id,
                     "replay_ts": req.replay_ts,
                     "request": req.model_dump(),
