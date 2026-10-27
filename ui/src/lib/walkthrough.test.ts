@@ -154,3 +154,46 @@ describe("the spine at a beat", () => {
     expect(nodeRuns("investigator", beats, board)).toBe(1);
   });
 });
+
+describe("a run that recorded its own human decision", () => {
+  // The shape of run c2aeb76b51d1 on the deployment: approved, so the trace
+  // carries hitl and learn steps, which are not nodes of the graph.
+  const approved: RecordedRun = {
+    ...run,
+    status: "approved",
+    trace: [
+      { seq: 1, node: "scope", summary: "question names valencia", lane: "none", latencyMs: 0 },
+      { seq: 2, node: "judge", summary: "PASS overall=1.00 hallucination=0% coverage=100% numbers=100% flagged=-" },
+      { seq: 3, node: "hitl", summary: "APPROVED by zain; 1 outbound action(s) released: A4" },
+      { seq: 4, node: "learn", summary: "approved run: 1 claim(s) stored in H-MEM, 0 already remembered" },
+    ],
+  };
+
+  it("names hitl and learn instead of printing the raw trace node", () => {
+    const { beats } = buildWalkthrough(approved);
+    expect(beats.map((b) => b.heading)).toEqual(["Scope", "Judge", "Human approval", "Memory write"]);
+  });
+
+  it("treats the recorded decision as the gate and adds no second one", () => {
+    const { beats } = buildWalkthrough(approved);
+    expect(beats).toHaveLength(approved.trace.length);
+    const gates = beats.filter((b) => b.kind === "gate");
+    expect(gates).toHaveLength(1);
+    expect(gates[0].summary).toMatch(/APPROVED by zain/);
+    expect(gates[0].spine).toBe("approval");
+  });
+
+  it("keeps the playhead on the gate for what follows it", () => {
+    const { beats } = buildWalkthrough(approved);
+    expect(beats[beats.length - 1].spine).toBe("approval");
+  });
+
+  it("reads a pass that writes flagged=- rather than an empty list", () => {
+    const { beats } = buildWalkthrough(approved);
+    const judge = beats.find((b) => b.verdict)!;
+    expect(judge.verdict!.passed).toBe(true);
+    expect(judge.verdict!.overall).toBe(1);
+    expect(judge.verdict!.flagged).toEqual([]);
+    expect(beats[beats.length - 1].ledger.flagged).toBe(0);
+  });
+});

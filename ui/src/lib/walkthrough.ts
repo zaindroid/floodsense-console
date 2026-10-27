@@ -65,6 +65,16 @@ export interface WalkthroughModel {
 const isBoard = (step: ReplayStep) => step.node === "world_model";
 const LOOP = /^(revise|repair) edge\s*->\s*(\w+)/i;
 
+/** Trace nodes that are not graph nodes, and what to call them. */
+const OTHER_LABELS: Record<string, string> = {
+  world_model: "World Model",
+  hitl: "Human approval",
+  learn: "Memory write",
+};
+
+/** Trace nodes that record the human decision: the run's own gate, not a step before it. */
+const GATE_NODES = new Set(["hitl", "approval"]);
+
 /** Pure: "FLAG overall=0.87 hallucination=17% ... flagged=['C-doc']" to a verdict. */
 export function parseVerdict(summary: string): JudgeVerdict | null {
   if (!/^(FLAG|PASS)\b/i.test(summary.trim())) return null;
@@ -144,8 +154,10 @@ export function buildWalkthrough(run: RecordedRun): WalkthroughModel {
     if (parsed) board = parsed;
 
     // A board beat reports on the node it names, so the playhead stays there.
+    const isGate = GATE_NODES.has(step.node);
     const named = parsed ? asNode(parsed.after) : asNode(step.node);
-    if (named) spine = named;
+    if (isGate) spine = "approval";
+    else if (named) spine = named;
 
     const queryIds = step.lane === "sql" ? (step.evidenceIds ?? []) : [];
     const claims = bySeq.get(step.seq) ?? [];
@@ -160,16 +172,12 @@ export function buildWalkthrough(run: RecordedRun): WalkthroughModel {
     ledger.supported = tally.supported;
     ledger.dropped = tally.dropped;
 
-    const kind: BeatKind = loop ? "loop" : isBoard(step) ? "board" : "work";
+    const kind: BeatKind = loop ? "loop" : isGate ? "gate" : isBoard(step) ? "board" : "work";
     const loopTo = loop ? asNode(loop[2].toLowerCase()) : null;
     const own = asNode(step.node);
     const heading = loop
       ? `${/^revise/i.test(loop[1]) ? "Revise" : "Repair"} loop`
-      : isBoard(step)
-        ? "World Model"
-        : own
-          ? NODE_LABELS[own]
-          : step.node;
+      : (OTHER_LABELS[step.node] ?? (own ? NODE_LABELS[own] : step.node));
     beats.push({
       index: beats.length,
       seq: step.seq,
@@ -190,8 +198,11 @@ export function buildWalkthrough(run: RecordedRun): WalkthroughModel {
     });
   }
 
-  // The gate is the run's status, not a trace step, and it closes the walk.
+  // A run that recorded its own decision already has its gate beat; the
+  // synthetic one below is for a run that stops before anyone decided.
   // A quick answer is "answered": it has no outbound action, so no human review.
+  if (beats.some((b) => b.kind === "gate")) return { beats, unlinkedClaims: unlinked };
+
   const waiting = run.status === "awaiting_approval";
   beats.push({
     index: beats.length,
