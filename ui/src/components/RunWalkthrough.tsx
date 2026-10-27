@@ -24,7 +24,7 @@ export function nodeState(node: PipelineNodeId, beats: Beat[], at: number): "cur
 
 /** Pure: how many agent steps a node has taken by this beat, so a re-run shows as ×2. */
 export function nodeRuns(node: PipelineNodeId, beats: Beat[], at: number): number {
-  return beats.slice(0, at + 1).filter((b) => b.spine === node && (b.kind === "work" || b.kind === "gate")).length;
+  return beats.slice(0, at + 1).filter((b) => b.spine === node && b.isRun).length;
 }
 
 function Ledger({ beat }: { beat: Beat }) {

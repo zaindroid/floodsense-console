@@ -183,9 +183,12 @@ describe("a run that recorded its own human decision", () => {
     expect(gates[0].spine).toBe("approval");
   });
 
-  it("keeps the playhead on the gate for what follows it", () => {
+  it("keeps the playhead on the gate for what follows it, without counting it as a second approval", () => {
     const { beats } = buildWalkthrough(approved);
-    expect(beats[beats.length - 1].spine).toBe("approval");
+    const last = beats[beats.length - 1];
+    expect(last.spine).toBe("approval");
+    expect(last.isRun).toBe(false);
+    expect(nodeRuns("approval", beats, beats.length - 1)).toBe(1);
   });
 
   it("reads a pass that writes flagged=- rather than an empty list", () => {

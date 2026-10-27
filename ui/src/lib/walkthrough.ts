@@ -53,6 +53,9 @@ export interface Beat {
   verdict: JudgeVerdict | null;
   /** For a loop beat, the node the run returns to. */
   loopTo: PipelineNodeId | null;
+  /** True when this beat is the graph node itself working, so it counts as a run of it.
+   *  A board reading and a trailing step like learn sit on a node without being it. */
+  isRun: boolean;
   ledger: Ledger;
 }
 
@@ -194,6 +197,7 @@ export function buildWalkthrough(run: RecordedRun): WalkthroughModel {
       board,
       verdict,
       loopTo,
+      isRun: !loop && (isGate || own !== null),
       ledger: { ...ledger },
     });
   }
@@ -222,6 +226,7 @@ export function buildWalkthrough(run: RecordedRun): WalkthroughModel {
     board,
     verdict: null,
     loopTo: null,
+    isRun: true,
     ledger: { ...ledger },
   });
 
