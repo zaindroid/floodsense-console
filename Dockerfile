@@ -20,13 +20,14 @@ ENV VITE_API_URL=/api
 # that waited. The documented override exists for exactly this.
 ENV VITE_API_TIMEOUT_MS=6000
 # Ask FloodSense shows a recorded run rather than the fixture answer. This is a
-# Nightshift run: approved on this deployment against live Zetaris, two claims,
-# both graded by Nemotron 3.5 Super VL. It is deliberately not swapped for an
-# older deterministic run that would display: adoptReplay refuses a run whose
-# summary is empty, every model-backed run returns one, and the panel then
-# falls back to the fixture without saying so. The deployment stays on the real
-# model so that failure is the one the team sees.
-ENV VITE_REPLAY_RUN_ID=74ef0c508578
+# Nightshift run on this deployment: approved, against the live Zetaris views,
+# graded by Nemotron 3.5 Super VL, and it carries a contract object.
+# adoptReplay refuses a run whose summary is empty, and the panel then falls
+# back to the fixture without saying so -- which is what the previous pin
+# (74ef0c508578) did once it was recorded before the empty-summary fix in #53.
+# Re-pin only to a run that has been read back from /runs/{id}/replay with a
+# non-empty summary.
+ENV VITE_REPLAY_RUN_ID=c2aeb76b51d1
 RUN npm run build
 
 # 2. the engines run TypeScript directly and have no runtime dependencies,
