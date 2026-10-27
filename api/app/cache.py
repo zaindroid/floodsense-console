@@ -57,6 +57,12 @@ log = logging.getLogger("floodsense.api.cache")
 
 CACHE_PREFIX = "floodsense:cache:v1:"
 REPLAY_PREFIX = "floodsense:replay:v1:"
+# Written only by `python tasks.py demo-seed` (app/demo_seed.py), so /system can say what was seeded.
+DEMO_PREFIX = "floodsense:demo:v1:"
+DEMO_SEED_KEY = DEMO_PREFIX + "seeded"
+# Layer (c) corpus and retrieval version. Bump it when corpus/manifest.yaml or the
+# retrieve_docs ranking changes, so answers cached before an ingest stop being served.
+CORPUS_VERSION = "rag-2026-10-27"
 REDIS_RETRY_S = 30.0
 REDIS_SOCKET_TIMEOUT_S = 0.5
 
@@ -116,9 +122,7 @@ _EVENT_PATTERNS: tuple[str, ...] = (
 _EVENT_RE = re.compile(
     "|".join(rf"\b(?:{p})\b" for p in _EVENT_PATTERNS), re.IGNORECASE | re.UNICODE
 )
-_LIVE_RE = re.compile(
-    "|".join(rf"\b(?:{p})\b" for p in _LIVE_PATTERNS), re.IGNORECASE | re.UNICODE
-)
+_LIVE_RE = re.compile("|".join(rf"\b(?:{p})\b" for p in _LIVE_PATTERNS), re.IGNORECASE | re.UNICODE)
 
 
 def _flag(name: str, default: bool) -> bool:
@@ -235,6 +239,7 @@ def key_of(request: dict[str, Any], flags: str) -> tuple:
         _provider_of(request),
         _context_of(request),
         flags,
+        CORPUS_VERSION,
     )
 
 
@@ -418,9 +423,16 @@ def approved_by_a_person(run: dict[str, Any]) -> bool:
     return run.get("status") == "approved" and approval in REMEMBERED
 
 
+def quick_answered(run: dict[str, Any]) -> bool:
+    """A quick-lane answer: no playbook, no HITL, ends ``answered`` (router.py)."""
+    return run.get("lane") == "quick" and run.get("status") == "answered"
+
+
 def finished_well(run: dict[str, Any]) -> bool:
-    """Approved or edited by a person, and passed by the Judge. Nothing else is cached."""
-    return approved_by_a_person(run) and (run.get("judge_summary") or {}).get("passes") is True
+    """Passed by the Judge, and approved or edited by a person, or a quick-lane
+    answer (nothing to approve). Nothing else is cached."""
+    passed = (run.get("judge_summary") or {}).get("passes") is True
+    return passed and (approved_by_a_person(run) or quick_answered(run))
 
 
 def is_follow_up(run: dict[str, Any]) -> bool:
@@ -592,7 +604,9 @@ class AnswerCache:
             return False
         request = run.get("request") or {}
         key = key_of(request, flags)
-        entry = Entry(run["run_id"], time.time(), self.ttl_for(request, flags))
+        # A quick-lane answer is a live reading: it ages like live data.
+        ttl = self.settings.ttl_live_s if quick_answered(run) else self.ttl_for(request, flags)
+        entry = Entry(run["run_id"], time.time(), ttl)
         with self._lock:
             self._entries[key] = entry
             self._entries.move_to_end(key)
@@ -656,9 +670,7 @@ class AnswerCache:
             while len(self._recordings) > self.settings.max_recordings:
                 self._recordings.popitem(last=False)  # Redis keeps it until its TTL
         if self._redis is not None:
-            self._redis.set_json(
-                _slot(REPLAY_PREFIX, slot), stored, self.settings.recording_ttl_s
-            )
+            self._redis.set_json(_slot(REPLAY_PREFIX, slot), stored, self.settings.recording_ttl_s)
 
     def recording_for(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """The recording of this question, event, customer, clock and language."""
@@ -676,6 +688,45 @@ class AnswerCache:
         if self._redis is None or not self._redis.up:
             return "memory"
         return "redis" if self._redis.call(lambda c: c.ping(), False) else "memory"
+
+    def key_counts(self, limit: int = 10_000) -> dict[str, int | None]:
+        """Keys per prefix. Redis is SCANned (capped at ``limit``); None when it does not answer."""
+        prefixes = {"cache": CACHE_PREFIX, "replay": REPLAY_PREFIX, "demo": DEMO_PREFIX}
+        if self._redis is None or not self._redis.up:
+            with self._lock:
+                return {"cache": len(self._entries), "replay": len(self._recordings), "demo": 0}
+
+        def count(prefix: str):
+            def go(client):
+                n = 0
+                for _ in client.scan_iter(match=prefix + "*", count=500):
+                    n += 1
+                    if n >= limit:
+                        break
+                return n
+
+            return go
+
+        return {name: self._redis.call(count(p), None) for name, p in prefixes.items()}
+
+    def demo_seeded(self) -> dict[str, Any] | None:
+        """The marker demo-seed leaves in Redis: which runs it warmed. None when absent."""
+        if self._redis is None:
+            return None
+        _, value = self._redis.get_json(DEMO_SEED_KEY)
+        return value
+
+    def demo_seeded_live(self) -> list[str]:
+        """Warmed run ids whose cache entry is still in Redis. An expired or evicted one is left out."""
+        marker = self.demo_seeded() or {}
+        live = []
+        for item in marker.get("entries") or []:
+            if not isinstance(item, dict) or not isinstance(item.get("cache_key"), str):
+                continue
+            _, value = self._redis.get_json(item["cache_key"]) if self._redis else (False, None)
+            if value is not None:
+                live.append(str(item.get("run_id")))
+        return live
 
     def stats(self) -> dict[str, Any]:
         """Flags, backend and this process's counts. No Redis scan."""

@@ -120,6 +120,14 @@ class Exposure(BaseModel):
     query_ids: list[str] = Field(default_factory=list)
 
 
+ActionType = Literal[
+    "notify-policyholders",
+    "dispatch-loss-adjuster",
+    "flag-underwriting-review",
+    "inform-public",
+]
+
+
 class PlaybookAction(BaseModel):
     action_id: str
     horizon_h: Literal[6, 24, 72]
@@ -127,6 +135,15 @@ class PlaybookAction(BaseModel):
     claim_ids: list[str] = Field(default_factory=list)
     outbound: bool = False  # contacts a person or authority: waits for approval
     released: bool = False  # set by HITL on approve / edit
+    # extra (approval card). All optional so older runs still load.
+    action_type: ActionType | None = None
+    title: str | None = None
+    target_region: str | None = None
+    # Distinct exposed sites from the Exposure node's query. None when unknown.
+    affected_site_count: int | None = None
+    # The exact text that would be sent. Nothing is sent before approval; it
+    # states only facts from the claims in claim_ids.
+    draft_message: str | None = None
 
 
 class JudgeScore(BaseModel):
@@ -170,6 +187,8 @@ class ApprovalDecision(BaseModel):
     edits: str | None = None  # the analyst's summary replaces ours on edit
     reviewer_note: str | None = None
     reviewer: str | None = None
+    # extra: on edit, a replacement draft_message per action_id.
+    draft_messages: dict[str, str] | None = None
 
 
 class TraceEvent(BaseModel):
@@ -183,6 +202,8 @@ class TraceEvent(BaseModel):
     tokens: int | None = None
     summary: str
     evidence_ids: list[str] = Field(default_factory=list)
+    phase: Literal["started", "finished"] = "finished"  # extra: a trace entry is a finished step
+    duration_ms: int | None = None  # extra: same value as latency_ms
 
 
 # A replay clock is a UTC instant and nothing else. Callers compare it and

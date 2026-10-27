@@ -4,6 +4,8 @@
            └─ watchers → investigator → skeptic ─┬─ not_supported & no revise yet → revise → investigator
                                        └─ → exposure → playbook → judge ─┬─ flagged & repair left → playbook (repair) → judge
                                                                           └─ → hitl (interrupt) → learn → END
+    scope ── in scope, lane=quick → live_watch → quick_answer → quick_judge ─┬─ pass → END (answered)
+                                                                    └─ flag / no data → escalate → watchers
 FF_SKEPTIC=false skips the Skeptic, FF_JUDGE=false skips the Judge, FF_HITL=false auto-approves (dev only).
 
 The engines sidecar (ENGINES_URL, engines/) joins in three places. The Watchers,
@@ -34,6 +36,7 @@ from floodsense_agents.nodes import (
     judge,
     memory,
     playbook,
+    quick,
     scope,
     skeptic,
     watchers,
@@ -99,8 +102,33 @@ def build_graph(
     # these views cannot answer is declined, not attempted.
     g.add_node("scope", scope.make())
     g.add_edge(START, "scope")
+    # Router lanes (router.py): lane=quick takes the short live path and ends
+    # answered, or escalates into the full lane at watchers. lane=full (and
+    # every run without a lane) routes exactly as before.
+    g.add_node("live_watch", quick.make_live_watch(deps))
+    g.add_node("quick_answer", quick.quick_answer)
+    g.add_node("quick_judge", quick.quick_judge)
+    g.add_node("escalate", quick.escalate)
     g.add_conditional_edges(
-        "scope", scope.route_after_scope, {"watchers": "watchers", "declined": END}
+        "scope",
+        quick.route_after_scope,
+        {"watchers": "watchers", "declined": END, "live_watch": "live_watch"},
+    )
+    g.add_conditional_edges(
+        "live_watch",
+        quick.route_after_live_watch,
+        {"quick_answer": "quick_answer", "escalate": "escalate"},
+    )
+    g.add_conditional_edges(
+        "quick_answer",
+        quick.route_after_answer,
+        {"quick_judge": "quick_judge", "escalate": "escalate"},
+    )
+    g.add_conditional_edges(
+        "quick_judge", quick.route_after_quick_judge, {"done": END, "escalate": "escalate"}
+    )
+    g.add_conditional_edges(
+        "escalate", quick.route_after_escalate, {"watchers": "watchers", "declined": END}
     )
     g.add_edge("watchers", "investigator")
 
@@ -137,6 +165,7 @@ def _live_retrieve(zetaris):
             default_embedder,
             default_hydrate,
             default_search,
+            default_search_generic,
             retrieve_docs,
         )
 
@@ -147,6 +176,7 @@ def _live_retrieve(zetaris):
             embedder=default_embedder,
             search=default_search,
             hydrate=lambda ids: default_hydrate(ids, zetaris),
+            search_generic=default_search_generic,
         )
 
     return retrieve

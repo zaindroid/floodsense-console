@@ -156,7 +156,8 @@ export function stationPosition(station: string): [number, number] | null {
 }
 
 /** Rhine and Ahr, the area the view covers. */
-export const GAUGE_BOUNDS = { south: 49.0, west: 6.1, north: 51.9, east: 8.5 };
+// The poller covers ten federal waterways (Rhine to Oder), so the map fits Germany.
+export const GAUGE_BOUNDS = { south: 47.9, west: 5.9, north: 54.0, east: 14.8 };
 
 const STEADY_CM = 1;
 

@@ -26,7 +26,7 @@ import logging
 import time
 from typing import Any, Callable
 
-from floodsense_agents.engines import short
+from floodsense_agents.engines import memory_origin, short
 from floodsense_agents.settings import settings
 from floodsense_agents.state import Deps, FloodState, NoMemory, trace
 
@@ -78,8 +78,10 @@ def recalling(node: Node, deps: Deps) -> Node:
                 memories = _same_event(
                     list(deps.memory.recall(state.get("request") or {})), state.get("event_id")
                 )
+                seeded = sum(1 for m in memories if memory_origin(m)[0])
                 notes.append(
                     f"recalled {len(memories)} past approved finding(s) for the Investigator"
+                    + (f" ({seeded} demo seed, not analyst-approved)" if seeded else "")
                 )
             except Exception as e:  # noqa: BLE001 - memory never fails a run
                 log.warning("memory: recall failed: %s", short(e))

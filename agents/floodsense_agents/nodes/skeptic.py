@@ -78,6 +78,35 @@ def _gauge_checks(s: str, found: dict) -> list[tuple[str, str, tuple[str, ...]]]
     ]
 
 
+def _watch_checks(s: str, found: dict) -> list[tuple[str, str, tuple[str, ...]]]:
+    """The Europe watch hypothesis: every cited gauge and model point is in its view."""
+    checks = []
+    stations = found.get("watch_stations") or []
+    if stations:
+        names = ", ".join("'" + str(x).replace("'", "''") + "'" for x in stations)
+        checks.append(
+            (
+                "every cited gauge has a live reading in gauge_levels",
+                f"SELECT COUNT(DISTINCT station) AS stations FROM {s}.gauge_levels WHERE "
+                f"{GAUGE_LIVE_ROWS} AND station IN ({names}) HAVING COUNT(DISTINCT station) = "
+                f"{len(stations)}",
+                (),
+            )
+        )
+    points = found.get("watch_points") or []
+    if points:
+        ids = ", ".join("'" + str(x).replace("'", "''") + "'" for x in points)
+        checks.append(
+            (
+                "every cited model point is a row of eu_watch",
+                f"SELECT COUNT(DISTINCT point_id) AS points FROM {s}.eu_watch WHERE point_id IN "
+                f"({ids}) HAVING COUNT(DISTINCT point_id) = {len(points)}",
+                (),
+            )
+        )
+    return checks
+
+
 def _live_checks_for(h: Hypothesis, state: FloodState) -> list[tuple[str, str, tuple[str, ...]]]:
     """Live counter-checks: the same view the claims cite (hazard_now), other predicates.
 
@@ -92,6 +121,8 @@ def _live_checks_for(h: Hypothesis, state: FloodState) -> list[tuple[str, str, t
     flow_at = DEFINITIONS["anomaly_discharge"].value
     if found.get("gauge_hypothesis") == h.id:
         return _gauge_checks(s, found)
+    if found.get("watch_hypothesis") == h.id:
+        return _watch_checks(s, found)
     if h.link == "rain->catchment":
         direction = (
             ("forecast rain reaches the anomaly line", f">= {rain_at}")
@@ -162,6 +193,9 @@ def _live_checks_for(h: Hypothesis, state: FloodState) -> list[tuple[str, str, t
 
 def _checks_for(h: Hypothesis, state: FloodState) -> list[tuple[str, str, tuple[str, ...]]]:
     """(name, sql): each query must return >= 1 row for the check to pass."""
+    found = state.get("live_findings") or {}
+    if found.get("watch_hypothesis") == h.id:
+        return _watch_checks(settings.schema, found)
     if is_live(state):
         return _live_checks_for(h, state)
     es, ev = settings.schema, state["event"]

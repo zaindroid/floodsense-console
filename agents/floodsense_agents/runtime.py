@@ -2,29 +2,37 @@
 
 start() runs until the HITL interrupt, snapshot() reads a run, resume()
 applies a decision. Used by the service and the eval runner.
+
+start_async() returns the run id at once and runs the graph on a daemon
+thread. While it runs, snapshot() reads each node's checkpoint as it lands,
+and started() lists the nodes that have begun (LangGraph debug stream), so
+GET /runs/{id}/events is a live feed.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import uuid
 from typing import Any
 
 from langgraph.types import Command
 
-from floodsense_agents import labelling
+from floodsense_agents import labelling, router
 from floodsense_agents.checkpoints import build_checkpointer
 from floodsense_agents.events import route_event, spec
 from floodsense_agents.graph import build_deps, build_graph
 from floodsense_agents.hitl import approval_payload
 from floodsense_agents.models import ApprovalDecision, RunRequest
 from floodsense_agents.nightshift import current_provider
-from floodsense_agents.state import run_model_ids
+from floodsense_agents.state import memory_used, normalise_trace, run_model_ids, trace
 from floodsense_agents.zetaris import now_utc
 
 log = logging.getLogger("floodsense.runtime")
 # Short-term thread memory: how much of a conversation a follow-up carries.
 THREAD_TURNS_MAX = 3
+LIVE_MAX = 64  # runs kept in Runtime.live; the oldest finished ones are dropped first
 TURN_SUMMARY_MAX = 600
 STATE_KEYS = (
     "run_id",
@@ -55,6 +63,8 @@ STATE_KEYS = (
     "live_findings",
     "model_ids",
     "error",
+    "lane",
+    "router_reason",
 )
 
 
@@ -97,17 +107,41 @@ class Runtime:
         self.index: dict[
             str, dict[str, Any]
         ] = {}  # run_id -> row for /runs/past (this process; state lives in the checkpointer)
+        # Background runs of this process: run_id -> {"started": [...], "done": bool}.
+        self.live: dict[str, dict[str, Any]] = {}
+        self._live_lock = threading.Lock()
 
     @staticmethod
     def cfg(run_id: str) -> dict:
         return {"configurable": {"thread_id": run_id}}
 
+    def is_running(self, run_id: str) -> bool:
+        """A background run of this process that has not finished its graph call."""
+        entry = self.live.get(run_id)
+        return bool(entry) and not entry["done"]
+
+    def started(self, run_id: str) -> list[dict[str, Any]]:
+        """Nodes of a background run that have begun, in order (phase "started")."""
+        with self._live_lock:
+            return list((self.live.get(run_id) or {}).get("started") or [])
+
     def snapshot(self, run_id: str) -> dict[str, Any]:
         snap = self.graph.get_state(self.cfg(run_id))
+        error = (self.live.get(run_id) or {}).get("error")
         if not snap or not snap.values:
-            raise RunNotFound(run_id)
-        v = dict(snap.values)
-        paused = bool(snap.tasks and any(getattr(t, "interrupts", None) for t in snap.tasks))
+            if error:
+                v, paused = {"run_id": run_id, "status": "failed", "error": error}, False
+            elif self.is_running(run_id):
+                # Accepted, no checkpoint yet: the first node is still working.
+                v, paused = {"run_id": run_id, "status": "running"}, False
+            else:
+                raise RunNotFound(run_id)
+        else:
+            v = dict(snap.values)
+            paused = bool(snap.tasks and any(getattr(t, "interrupts", None) for t in snap.tasks))
+            if error and v.get("status") != "failed":
+                v.update(status="failed", error=error)
+                paused = False
         out = {k: v.get(k) for k in STATE_KEYS}
         for k, empty in (
             ("anomalies", []),
@@ -124,7 +158,13 @@ class Runtime:
             ("provenance", []),
         ):
             out[k] = out[k] if out[k] is not None else empty
+        # Runs recorded before the router took the full lane.
+        out["lane"] = out["lane"] or router.FULL
+        out["trace"] = normalise_trace(out["trace"])
         out["model_ids"] = run_model_ids(out["trace"], out["model_ids"])
+        # H-MEM provenance, run level: which approved past findings the
+        # Investigator saw. Not linked per claim (see state.memory_used).
+        out["memory_used"] = memory_used(out["memories"])
         out["approval"] = out["approval"] or {
             "status": "awaiting" if paused else "not_reached",
             "decision": None,
@@ -191,6 +231,7 @@ class Runtime:
             approval=(snap.get("approval") or {}).get("status"),
             served_from=snap["served_from"],
             cached_at=snap["cached_at"],
+            lane=snap.get("lane"),
         )
         self.index[run_id] = row
         return row
@@ -211,13 +252,87 @@ class Runtime:
         a client continuing a conversation hears when it is not.
         """
         self._rebuild_index()
-        rows = [r for r in self.index.values() if r.get("thread_id") == thread_id]
+        rows = [r for r in list(self.index.values()) if r.get("thread_id") == thread_id]
         if not rows:
             raise ThreadNotFound(thread_id)
         rows.sort(key=lambda r: r.get("created_at") or "")
         return [turn_of(self.snapshot(r["run_id"])) for r in rows[-THREAD_TURNS_MAX:]]
 
     def start(self, req: RunRequest) -> dict[str, Any]:
+        run_id, inputs, provider = self._prepare(req)
+        self._execute(run_id, inputs, provider)
+        return self.snapshot(run_id)
+
+    def start_async(self, req: RunRequest) -> dict[str, Any]:
+        """Accept a run and return its id now. The graph runs on a daemon thread.
+
+        Request errors (unknown event, unknown thread) still raise here, before
+        anything is accepted.
+        """
+        run_id, inputs, provider = self._prepare(req)
+        self._track(run_id)
+        threading.Thread(
+            target=self._execute,
+            args=(run_id, inputs, provider),
+            kwargs={"stream": True},
+            name=f"run-{run_id}",
+            daemon=True,
+        ).start()
+        return {"run_id": run_id, "thread_id": inputs["thread_id"], "status": "running"}
+
+    def _note_started(self, run_id: str, chunk: Any) -> None:
+        if not isinstance(chunk, dict) or chunk.get("type") != "task":
+            return
+        name = (chunk.get("payload") or {}).get("name")
+        if not name or str(name).startswith("__"):
+            return
+        with self._live_lock:
+            entry = self.live.get(run_id)
+            if entry is not None:
+                entry["started"].append(
+                    {"run_id": run_id, "node": name, "phase": "started", "ts": now_utc()}
+                )
+
+    def _execute(
+        self, run_id: str, inputs: dict[str, Any], provider: str, *, stream: bool = False
+    ) -> None:
+        self._track(run_id)
+        token = current_provider.set(provider)
+        try:
+            if stream:
+                for chunk in self.graph.stream(inputs, self.cfg(run_id), stream_mode="debug"):
+                    self._note_started(run_id, chunk)
+            else:
+                self.graph.invoke(inputs, self.cfg(run_id))
+        except Exception as e:
+            log.exception("run %s failed", run_id)
+            error = str(e)[:500]
+            # Kept in memory too, so the run reads failed even when the
+            # checkpoint write below fails as well.
+            with self._live_lock:
+                self.live[run_id]["error"] = error
+            try:
+                self.graph.update_state(self.cfg(run_id), {"status": "failed", "error": error})
+            except Exception as e2:  # noqa: BLE001 - the in-memory mark stands
+                log.warning("run %s: could not record the failure: %s", run_id, str(e2)[:120])
+        finally:
+            current_provider.reset(token)
+            with self._live_lock:
+                self.live[run_id]["done"] = True
+            try:
+                self._index_row(run_id)
+            except Exception as e3:  # noqa: BLE001 - listing is best effort
+                log.warning("run %s: could not index: %s", run_id, str(e3)[:120])
+
+    def _track(self, run_id: str) -> None:
+        """Register a run in self.live, dropping the oldest finished ones past LIVE_MAX."""
+        with self._live_lock:
+            self.live.setdefault(run_id, {"started": [], "done": False})
+            done = [k for k, e in self.live.items() if e["done"]]
+            for k in done[: max(0, len(self.live) - LIVE_MAX)]:
+                del self.live[k]
+
+    def _prepare(self, req: RunRequest) -> tuple[str, dict[str, Any], str]:
         run_id = uuid.uuid4().hex[:12]
         # A Rhine / Köln / Ahr question on the default event runs on EMSR517.
         routed, route_why = route_event(
@@ -229,35 +344,37 @@ class Runtime:
         served_from, cached_at = labelling.computation_label(
             req.replay_ts, live=self._answers_are_live()
         )
-        token = current_provider.set(req.llm_provider)
-        try:
-            self.graph.invoke(
-                {
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "thread": turns,
-                    "event_id": ev.event_id,
-                    "event_route": route_why,
-                    "customer_id": req.customer_id,
-                    "replay_ts": req.replay_ts,
-                    "request": req.model_dump(),
-                    "event": ev.as_dict(),
-                    "served_from": served_from,
-                    "cached_at": cached_at,
-                    "trace": [],
-                    "revise_rounds": 0,
-                    "repair_rounds": 0,
-                    "model_ids": [],
-                },
-                self.cfg(run_id),
-            )
-        except Exception as e:
-            log.exception("run %s failed", run_id)
-            self.graph.update_state(self.cfg(run_id), {"status": "failed", "error": str(e)[:500]})
-        finally:
-            current_provider.reset(token)
-        self._index_row(run_id)
-        return self.snapshot(run_id)
+        t_route = time.time()
+        llm = getattr(self.deps, "llm", None) if self.deps is not None else None
+        lane = router.route(req, llm)
+        router_trace = trace(
+            {"run_id": run_id, "trace": []},
+            "router",
+            lane["reason"],
+            lane="fast" if lane["model_id"] != "rules" else "none",
+            model_id=None if lane["model_id"] == "rules" else lane["model_id"],
+            started=t_route,
+        )
+        inputs = {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "thread": turns,
+            "event_id": ev.event_id,
+            "event_route": route_why,
+            "customer_id": req.customer_id,
+            "replay_ts": req.replay_ts,
+            "request": req.model_dump(),
+            "event": ev.as_dict(),
+            "served_from": served_from,
+            "cached_at": cached_at,
+            "lane": lane["lane"],
+            "router_reason": lane["reason"],
+            "trace": router_trace,
+            "revise_rounds": 0,
+            "repair_rounds": 0,
+            "model_ids": [],
+        }
+        return run_id, inputs, req.llm_provider
 
     def resume(self, run_id: str, decision: ApprovalDecision) -> dict[str, Any]:
         s = self.snapshot(run_id)
@@ -311,7 +428,7 @@ class Runtime:
 
     def past(self, limit: int = 50, thread_id: str | None = None) -> list[dict[str, Any]]:
         whole = self._rebuild_index()
-        rows = [r for r in self.index.values() if not thread_id or r.get("thread_id") == thread_id]
+        rows = [r for r in list(self.index.values()) if not thread_id or r.get("thread_id") == thread_id]
         rows = sorted(rows, key=lambda r: r["updated_at"], reverse=True)[:limit]
         for r in rows:
             r["scope"] = "all runs on this checkpointer" if whole else "this process only"

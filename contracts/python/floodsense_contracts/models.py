@@ -21,7 +21,11 @@ Layer = Literal["a", "b", "c"]
 Storage = Literal["full_text", "pointer"]
 Grounding = Literal["supported", "partial", "unsupported"]
 ServedFrom = Literal["live", "cache", "replay"]
+Lane = Literal["quick", "full"]  # run lanes; a front-door reply is lane "reply"
 ApprovalStatus = Literal["pending", "approved", "edited", "rejected"]
+ActionType = Literal[
+    "notify-policyholders", "dispatch-loss-adjuster", "flag-underwriting-review", "inform-public"
+]
 ModelId = Literal[
     "meterless/fast",
     "meterless/deep",
@@ -125,6 +129,13 @@ class PlaybookAction(ContractModel):
     title: str
     detail: str
     citation_ids: list[str] = Field(min_length=1)
+    # Optional approval-card fields (v0.13).
+    action_type: ActionType | None = None
+    target_region: str | None = None
+    affected_site_count: int | None = Field(default=None, ge=0)
+    draft_message: str | None = None
+    outbound: bool = False
+    released: bool = False
 
 
 class Approval(ContractModel):
@@ -134,6 +145,17 @@ class Approval(ContractModel):
     status: ApprovalStatus
     note: str | None = None
     judge: Judge | None = None
+
+
+class MemoryUsed(ContractModel):
+    memory_id: str = Field(min_length=1)
+    run_id: str | None = None
+    claim_id: str | None = None
+    approved_at: str | None = None
+    text: str
+    relevance: float | None = None
+    reviewer: str | None = None
+    seeded: bool
 
 
 class Answer(ContractModel):
@@ -146,6 +168,9 @@ class Answer(ContractModel):
     cached_at: str | None = Field(default=None, pattern=DATE_TIME)
     playbook_actions: list[PlaybookAction] = Field(default_factory=list)
     judge: Judge | None = None
+    lane: Lane | None = None
+    router_reason: str | None = None
+    memory_used: list[MemoryUsed] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def cached_at_matches_served_from(self) -> Answer:
@@ -155,3 +180,22 @@ class Answer(ContractModel):
         elif self.cached_at is None:
             raise ValueError("cached_at is required when served_from is not live")
         return self
+
+
+ReplyIntent = Literal["greeting", "help", "thanks", "off_topic"]
+
+
+class ReplyResponse(ContractModel):
+    """Front-door reply to POST /runs. No run_id; never a flood fact."""
+
+    kind: Literal["reply"]
+    intent: ReplyIntent
+    answer: str = Field(min_length=1)
+    suggestions: list[str] = Field(max_length=3)
+    model_id: str = Field(min_length=1)
+    latency_ms: int = Field(ge=0)
+    lane: Literal["reply"] | None = None
+
+
+# What POST /runs returns.
+RunResponse = Answer | ReplyResponse

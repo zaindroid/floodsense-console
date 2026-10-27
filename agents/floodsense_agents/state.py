@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
 
-from floodsense_agents.engines import NoWorld, WorldModel
+from floodsense_agents.engines import NoWorld, WorldModel, memory_origin
 from floodsense_agents.models import Evidence, TraceEvent
 from floodsense_agents.nightshift import LLM
 from floodsense_agents.zetaris import Zetaris, now_utc
@@ -79,11 +79,15 @@ class FloodState(TypedDict, total=False):
     live_findings: dict[str, Any]  # live mode: what the Investigator found crossing
     mode: dict[str, Any]  # live.resolve_mode: {mode event|live, explicit, reason}
     scope: dict[str, Any]  # the gate's verdict: can this run honestly answer
-    status: str  # running | awaiting_approval | approved | rejected | failed
+    status: str  # running | awaiting_approval | approved | rejected | failed | answered (quick lane)
     served_from: str  # live | cache | replay. live only for a fresh live-schema read
     cached_at: str | None
     model_ids: list[str]
     error: str
+    # router.py: which agent path runs (quick | full), why, and a pending escalation
+    lane: str
+    router_reason: str
+    escalate: str | None
 
 
 def trace(
@@ -97,6 +101,7 @@ def trace(
     evidence_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     prev = state.get("trace", [])
+    ms = int((time.time() - started) * 1000) if started else None
     ev = TraceEvent(
         run_id=state.get("run_id", ""),
         seq=len(prev) + 1,
@@ -104,11 +109,53 @@ def trace(
         node=node,
         lane=lane,
         model_id=model_id,
-        latency_ms=int((time.time() - started) * 1000) if started else None,
+        latency_ms=ms,
+        duration_ms=ms,
         summary=summary,
         evidence_ids=evidence_ids or [],
     )
     return [*prev, ev.model_dump()]
+
+
+def normalise_trace(events: list[dict] | None) -> list[dict]:
+    """Trace entries with phase and duration_ms, also for runs recorded before both existed."""
+    out = []
+    for ev in events or []:
+        ev = dict(ev)
+        ev.setdefault("phase", "finished")
+        if ev.get("duration_ms") is None:
+            ev["duration_ms"] = ev.get("latency_ms")
+        out.append(ev)
+    return out
+
+
+def memory_used(memories: list[dict] | None) -> list[dict]:
+    """What H-MEM recalled for the Investigator, as provenance.
+
+    Run level only. Memories reach the Investigator's prompt as context and
+    claims cite this run's queries, so which claim leaned on which memory is
+    not knowable, and is not claimed.
+    """
+    out = []
+    for m in memories or []:
+        if not isinstance(m, dict):
+            continue
+        prov = m.get("provenance") if isinstance(m.get("provenance"), dict) else {}
+        seeded, reviewer = memory_origin(m)
+        out.append(
+            {
+                "memory_id": m.get("memory_id"),
+                "run_id": m.get("run_id"),
+                "claim_id": m.get("claim_id"),
+                # H-MEM writes only on approval, so learned_at is the approval time.
+                "approved_at": prov.get("learned_at"),
+                "text": str(m.get("content") or "")[:200],
+                "relevance": m.get("relevance"),
+                "reviewer": reviewer,
+                "seeded": seeded,
+            }
+        )
+    return out
 
 
 def run_model_ids(trace_events: list[dict] | None, recorded: list[str] | None = None) -> list[str]:

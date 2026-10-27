@@ -31,6 +31,7 @@ CONTRACT_VIEWS = (
     "discharge_daily",
     "exposure_join",
     "gauge_levels",
+    "eu_watch",
     "provenance",
 )
 
@@ -72,6 +73,12 @@ OWNERS: dict[str, Owner] = {
     ),
     "gauge_levels": Owner(
         view="gauge_levels",
+        owner="hazard data lead",
+        steward="ingestion",
+        releases="duty underwriter",
+    ),
+    "eu_watch": Owner(
+        view="eu_watch",
         owner="hazard data lead",
         steward="ingestion",
         releases="duty underwriter",

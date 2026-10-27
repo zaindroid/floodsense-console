@@ -45,7 +45,8 @@ export function usableEventRows(rows: unknown, event: DisasterEvent, prefix: str
 const AHR_NAMES: Record<string, string> = {
   AHR01: "Altenahr",
   AHR02: "Bad Neuenahr-Ahrweiler",
-  AHR03: "Upper Ahr",
+  AHR03: "Schuld",
+  AHR04: "Dernau",
 };
 
 /** Badge for rows read through `?source=replay`; `schema` is the x-schema header (floodsense_seed for the Ahr). */

@@ -32,6 +32,7 @@ from typing import Protocol, Sequence
 
 import httpx
 
+from floodsense_agents.watch import EU_POINTS
 from floodsense_agents.events import EVENTS, VALENCIA_POINT_IDS
 from floodsense_agents.models import Evidence
 from floodsense_agents.settings import settings
@@ -309,6 +310,7 @@ CREATE TABLE {s}.hazard_now(point_id TEXT, ts_utc TEXT, rain_mm REAL, discharge_
 CREATE TABLE {s}.discharge_daily(point_id TEXT, date TEXT, discharge_m3s REAL, source TEXT);
 CREATE TABLE {s}.exposure_join(policy_id TEXT, site_id TEXT, lat REAL, lon REAL, in_footprint INTEGER, sum_insured_eur REAL, segment TEXT);
 CREATE TABLE {s}.gauge_levels(station TEXT, water TEXT, ts_utc TEXT, level_cm REAL, source TEXT);
+CREATE TABLE {s}.eu_watch(point_id TEXT, name TEXT, country TEXT, river TEXT, lat REAL, lon REAL, discharge_m3s REAL, forecast_max_m3s REAL, past30_median_m3s REAL, band TEXT, basis TEXT, source TEXT, as_of_date TEXT);
 CREATE TABLE {s}.provenance(dataset TEXT, source_url TEXT, publisher TEXT, licence TEXT, attribution TEXT, fetched_at TEXT);
 """
 
@@ -384,6 +386,26 @@ _SEED = {
         (_AHR_RIVER, "2021-07-15", 210.0, "GloFAS via Open-Meteo"),
     ],
     "gauge_levels": _gauge_seed_rows(),
+    # The twelve points of migration 062: positions only, no discharge, band unknown.
+    # A test that needs a reading sets one.
+    "eu_watch": [
+        (
+            p,
+            name,
+            cc,
+            river,
+            lat,
+            lon,
+            None,
+            None,
+            None,
+            "unknown",
+            "model, not an official warning: seed row, no reading",
+            "seed:openmeteo_flood",
+            None,
+        )
+        for p, name, cc, river, lat, lon in EU_POINTS
+    ],
     # Synthetic portfolio of the demo insurer around the EMSR773 footprint.
     # in_footprint comes from the Copernicus layer.
     "exposure_join": [

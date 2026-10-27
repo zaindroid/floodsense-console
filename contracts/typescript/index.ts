@@ -10,6 +10,8 @@ export type CitationLayer = "a" | "b" | "c";
 export type Storage = "full_text" | "pointer";
 export type Grounding = "supported" | "partial" | "unsupported";
 export type ServedFrom = "live" | "cache" | "replay";
+/** Router lane. reply: front-door reply; quick: live watcher + one fast call; full: deep run. */
+export type Lane = "reply" | "quick" | "full";
 export type ApprovalStatus = "pending" | "approved" | "edited" | "rejected";
 export type ModelId =
   | "meterless/fast"
@@ -102,7 +104,22 @@ export interface PlaybookAction {
   title: string;
   detail: string;
   citation_ids: string[];
+  /** Optional approval-card fields (v0.13). */
+  action_type?: ActionType | null;
+  target_region?: string | null;
+  /** Distinct exposed sites; null when not knowable. */
+  affected_site_count?: number | null;
+  /** Exact text an outbound action would send, only after approval. */
+  draft_message?: string | null;
+  outbound?: boolean;
+  released?: boolean;
 }
+
+export type ActionType =
+  | "notify-policyholders"
+  | "dispatch-loss-adjuster"
+  | "flag-underwriting-review"
+  | "inform-public";
 
 export interface Approval {
   approval_id: string;
@@ -112,6 +129,19 @@ export interface Approval {
   note?: string;
   /** Set when the Judge has scored the run. */
   judge?: Judge;
+}
+
+/** A past approved finding H-MEM recalled for the Investigator. Context, never evidence. */
+export interface MemoryUsed {
+  memory_id: string;
+  run_id?: string | null;
+  claim_id?: string | null;
+  approved_at?: string | null;
+  text: string;
+  relevance?: number | null;
+  reviewer?: string | null;
+  /** True for items added by tasks.py demo-seed, not by an analyst. */
+  seeded: boolean;
 }
 
 export interface Answer {
@@ -128,4 +158,27 @@ export interface Answer {
   cached_at?: string | null;
   playbook_actions?: PlaybookAction[];
   judge?: Judge;
+  /** Which agent path answered. Omitted by runs recorded before the router. */
+  lane?: Exclude<Lane, "reply">;
+  /** Why the router chose the lane, including any "escalated: ..." note. */
+  router_reason?: string;
+  memory_used?: MemoryUsed[];
 }
+
+export type ReplyIntent = "greeting" | "help" | "thanks" | "off_topic";
+
+/** Front-door reply to POST /runs: no run_id, never a flood fact, never cached as a run. */
+export interface ReplyResponse {
+  kind: "reply";
+  intent: ReplyIntent;
+  answer: string;
+  /** Up to three example questions. */
+  suggestions: string[];
+  /** The fast-lane model that classified the message, or "rules". */
+  model_id: string;
+  latency_ms: number;
+  lane?: "reply";
+}
+
+/** What POST /runs returns. */
+export type RunResponse = Answer | ReplyResponse;

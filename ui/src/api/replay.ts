@@ -1,4 +1,5 @@
 import { apiBaseUrl, apiTimeoutMs } from "./config";
+import { adoptMemoryUsed, adoptPlaybook, type MemoryUsed, type PlaybookItem } from "../lib/hitl";
 
 /** One citation from a recorded run. Layer (c) carries a document passage. */
 export interface ReplayCitation {
@@ -11,6 +12,10 @@ export interface ReplayCitation {
   quote: string | null;
   page: number | null;
   queryId: string | null;
+  /** Source URL of the passage or feed, when the citation carries one. */
+  sourceUrl?: string | null;
+  paragraph?: number | null;
+  chunkId?: string | null;
 }
 
 export interface ReplayClaim {
@@ -68,6 +73,15 @@ export interface RecordedRun {
   memoryCount?: number;
   /** Run-level LLM provider from the body or its request, when stated. */
   provider?: string | null;
+  /** A declined run's scope.elsewhere: the event that does hold the question, when the gate named one. */
+  elsewhere?: string | null;
+  /** Router lane (contracts Lane): quick = live watcher + one fast call, full = deep run. Null on older runs. */
+  lane?: "quick" | "full" | null;
+  /** Why the router chose the lane, including any "escalated: ..." note. */
+  routerReason?: string | null;
+  /** H-MEM recall for this run (run level; never linked to a claim). */
+  memoryUsed?: MemoryUsed[];
+  playbook?: PlaybookItem[];
 }
 
 const str = (value: unknown): string | null => (typeof value === "string" && value.length > 0 ? value : null);
@@ -89,6 +103,9 @@ function asCitation(value: unknown): ReplayCitation | null {
     quote: str(c.quote),
     page: num(rec(c.locator)?.page),
     queryId: str(c.query_id),
+    sourceUrl: str(c.source_url),
+    paragraph: num(rec(c.locator)?.paragraph),
+    chunkId: str(c.chunk_id),
   };
 }
 
@@ -162,6 +179,9 @@ export function adoptRunBody(run: Record<string, unknown>, runId: string): Recor
     modelIds: Array.isArray(run.model_ids) ? run.model_ids.filter((m): m is string => typeof m === "string") : [],
     mode: modeOf(run.mode),
     eventId: str(run.event_id),
+    elsewhere: str(rec(run.scope)?.elsewhere),
+    lane: run.lane === "quick" || run.lane === "full" ? run.lane : null,
+    routerReason: str(run.router_reason),
     reviseRounds: num(run.revise_rounds) ?? 0,
     repairRounds: num(run.repair_rounds) ?? 0,
     judgeClaims: Array.isArray(run.judge)
@@ -176,6 +196,8 @@ export function adoptRunBody(run: Record<string, unknown>, runId: string): Recor
     docQuery: str(rec(run.request)?.doc_query),
     memoryCount: Array.isArray(run.memories) ? run.memories.length : 0,
     provider: str(run.llm_provider) ?? str(run.provider) ?? str(rec(run.request)?.llm_provider),
+    memoryUsed: Array.isArray(run.memory_used) ? adoptMemoryUsed(run.memory_used) : undefined,
+    playbook: adoptPlaybook(run.playbook),
   };
 }
 

@@ -2,6 +2,7 @@ import { apiBaseUrl } from "./config";
 import { adoptRunBody, type RecordedRun } from "./replay";
 import type { LlmProvider } from "../lib/llmProvider";
 import { withAskContext, type AskContext } from "../lib/askContext";
+import { modelChip } from "../lib/modelChip";
 
 export const DEFAULT_EVENT_ID = "EMSR773";
 
@@ -66,8 +67,44 @@ export function buildRunRequest(input: AskInput): Record<string, unknown> {
   return withAskContext(body, input.context);
 }
 
+/** Front-door reply to POST /runs (contracts ReplyResponse): small talk answered without a run. Never a flood fact. */
+export interface ReplyResponse {
+  kind: "reply";
+  intent: "greeting" | "help" | "thanks" | "off_topic";
+  answer: string;
+  suggestions: string[];
+  model_id: string;
+  latency_ms: number;
+  /** Router lane: always "reply" for a front-door reply. */
+  lane?: "reply";
+}
+
+const REPLY_INTENTS = new Set(["greeting", "help", "thanks", "off_topic"]);
+
+/** Type guard: a POST /runs body that is a front-door reply, not a run snapshot. */
+export function isReply(body: unknown): body is ReplyResponse {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const b = body as Record<string, unknown>;
+  return (
+    b.kind === "reply" &&
+    typeof b.intent === "string" &&
+    REPLY_INTENTS.has(b.intent) &&
+    typeof b.answer === "string" &&
+    b.answer.length > 0 &&
+    Array.isArray(b.suggestions) &&
+    b.suggestions.every((s) => typeof s === "string") &&
+    typeof b.model_id === "string" &&
+    typeof b.latency_ms === "number"
+  );
+}
+
 export type AskResult =
   | { ok: true; run: RecordedRun }
+  /**
+   * A front-door reply (greeting, help, thanks, off-topic): no run exists. `message` is the
+   * reply text, so a caller that only knows the error branch still shows it; render `reply`.
+   */
+  | { ok: false; kind: "reply"; message: string; reply: ReplyResponse }
   | { ok: false; kind: "rate_limited" | "provider" | "server" | "bad_response" | "network" | "aborted"; message: string };
 
 const detailOf = (body: unknown): string | null => {
@@ -96,6 +133,7 @@ export function mapRunResponse(status: number, body: unknown, retryAfter: string
   if (status < 200 || status >= 300) {
     return { ok: false, kind: "server", message: `Request failed (${status})${detailOf(body) ? `: ${detailOf(body)}` : ""}.` };
   }
+  if (isReply(body)) return { ok: false, kind: "reply", message: body.answer, reply: body };
   const rec = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
   const runId = rec && typeof rec.run_id === "string" ? rec.run_id : "";
   const run = rec ? adoptRunBody(rec, runId) : null;
@@ -107,7 +145,10 @@ export function mapRunResponse(status: number, body: unknown, retryAfter: string
 export function runBadge(run: RecordedRun): string {
   if (run.servedFrom === "live") {
     const model = run.modelIds[run.modelIds.length - 1];
-    return model ? `Live · ${model}` : "Live";
+    if (!model) return "Live";
+    // The lane of the last step that used this model: "Live · Nemotron 3.5 Lightning 30B · Nightshift deep lane".
+    const step = [...run.trace].reverse().find((s) => (s.modelId ?? "").includes(model) && s.lane);
+    return `Live · ${modelChip(model, step?.lane ?? null)}`;
   }
   if (run.servedFrom === "cache") return run.label || "Cached answer · not live";
   return run.label || `Replay · recorded run ${run.runId} · not live`;

@@ -47,6 +47,22 @@ views:
     - {name: fetched_at, type: timestamp}
     # is_stale: fetched_at missing or older than 30 min (live); always true in seed.
     - {name: is_stale, type: boolean}
+  # min_rows: 11 (live and seed). EU live watch, GloFAS model points outside Germany (060-065; 064/065 are the latest).
+  # band is relative to the series (7-day forecast max vs 2x the exact past-30-day median): model, not an official warning.
+  eu_watch:
+    - {name: point_id, type: string}
+    - {name: name, type: string}
+    - {name: country, type: string}
+    - {name: river, type: string}
+    - {name: lat, type: double}
+    - {name: lon, type: double}
+    - {name: discharge_m3s, type: double}
+    - {name: forecast_max_m3s, type: double}
+    - {name: past30_median_m3s, type: double}
+    - {name: band, type: string}
+    - {name: basis, type: string}
+    - {name: source, type: string}
+    - {name: as_of_date, type: date}
   # min_rows: 359 (live and seed). synthetic is the portfolio flag (yes). Not a live book.
   # Migration 018 is the column list verify checks once it is applied. 014 and 016 create the view first.
   exposure_join:

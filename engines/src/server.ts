@@ -5,6 +5,7 @@
 //   POST /hmem/store                   { run_id, question, event_id?, approval: { status, reviewer? }, claims: [...] }
 //   POST /hmem/feedback                { memory_id, kind: helpful | not_helpful | wrong }
 //   GET  /hmem/ledger?memory_id=...    trust-ledger trace for one memory
+//   GET  /hmem/memories?limit=...      newest memories, read-only (total + up to 50)
 //   POST /wm/observations              { anomalies?: [...], observations?: [...] }  (idempotent ingest)
 //   POST /wm/hypotheses                { run_id, at, by?, hypotheses: [...] }
 //   GET  /wm/board?run_id=...          hypothesis board
@@ -57,6 +58,11 @@ async function handle(engines: FloodsenseEngines, req: http.IncomingMessage, res
     }
     case "GET /hmem/ledger":
       return send(res, 200, { entries: engines.ledger(url.searchParams.get("memory_id") ?? "") });
+    case "GET /hmem/memories": {
+      const raw = url.searchParams.get("limit");
+      const limit = raw === null ? 5 : /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+      return send(res, 200, engines.memories(limit));
+    }
     case "POST /wm/observations":
       return send(res, 200, await engines.observe(await readJson(req)));
     case "POST /wm/hypotheses":

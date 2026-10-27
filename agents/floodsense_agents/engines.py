@@ -172,6 +172,28 @@ def build_engines() -> EnginesClient | None:
     )
 
 
+SEED_REVIEWER = "demo-seed"
+
+
+def memory_origin(memory: dict[str, Any]) -> tuple[bool, str | None]:
+    """(seeded, reviewer) of a recalled memory.
+
+    The engines label a stored memory "run R <status> by <reviewer>". A memory
+    is seeded when `tasks.py demo-seed` wrote it: reviewer demo-seed, a
+    demo-seed-* run id, or the entity:demo-seed tag.
+    """
+    prov = memory.get("provenance") if isinstance(memory.get("provenance"), dict) else {}
+    label = str(prov.get("label") or "")
+    reviewer = label.rsplit(" by ", 1)[1].strip() or None if " by " in label else None
+    tags = memory.get("tags") if isinstance(memory.get("tags"), list) else []
+    seeded = (
+        reviewer == SEED_REVIEWER
+        or str(memory.get("run_id") or "").startswith(SEED_REVIEWER)
+        or f"entity:{SEED_REVIEWER}" in tags
+    )
+    return seeded, reviewer
+
+
 def short(err: Exception) -> str:
     """One line for the trace."""
     return " ".join(str(err).split())[:ERROR_SNIPPET]

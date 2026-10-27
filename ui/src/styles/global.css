@@ -1091,3 +1091,79 @@ a.button.primary { color: #f4fffc; }
   .leaflet-map { height: 300px; }
   .view__title { font-size: 1.3rem; }
 }
+
+/* Sites / map: event points on Leaflet. Colours reuse the discharge band tokens. */
+.site-pin { background: transparent; border: 0; }
+.site-pin__dot {
+  display: block; width: 22px; height: 22px; border-radius: 999px; box-sizing: border-box;
+  border: 2px solid var(--marker-stroke); background: var(--band, var(--band-low)); box-shadow: 0 0 0 1px var(--border);
+}
+.site-pin__dot[data-band="low"] { --band: var(--band-low); }
+.site-pin__dot[data-band="typical"] { --band: var(--band-typical); }
+.site-pin__dot[data-band="elevated"] { --band: var(--band-elevated); }
+.site-pin__dot[data-band="peak"] { --band: var(--band-peak); }
+.site-pin__dot[data-selected="true"] { box-shadow: 0 0 0 4px color-mix(in srgb, var(--band) 40%, transparent), 0 0 0 1px var(--ink); }
+.site-pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 999px; }
+.leaflet-tooltip.site-label { padding: 0.05rem 0.4rem; font-size: 0.75rem; font-weight: 650; }
+.leaflet-tooltip.site-label.is-selected { background: var(--ink); color: var(--bg); }
+.exposure-site { fill: var(--accent-strong); fill-opacity: 0.7; stroke: var(--marker-stroke); stroke-width: 1; }
+
+/* Approvals: the decision buttons sit clear of the review note. */
+.decision-bar .field + .error-text { margin: 0.5rem 0 0; }
+.decision-bar .button-row { margin-top: 0.8rem; }
+
+/* Now: one labelled section per region. */
+.now-region { display: grid; gap: 0.6rem; border-top: 1px solid var(--line); padding-top: 0.8rem; margin-top: 0.8rem; min-width: 0; }
+.now-region-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.4rem; }
+
+/* Ask greeting: suggested questions wrap at 375 px, never scroll sideways. */
+.ask-greeting .ask-question { font-weight: 500; }
+.ask-suggestions { list-style: none; margin: 0.5rem 0 0.6rem; padding: 0; display: grid; gap: 0.4rem; }
+.ask-suggestion {
+  width: 100%; text-align: left; font: inherit; cursor: pointer; overflow-wrap: anywhere;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; padding: 0.45rem 0.6rem;
+}
+.ask-suggestion:hover:not(:disabled) { border-color: var(--accent-strong); }
+.ask-suggestion:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.ask-suggestion:disabled { opacity: 0.6; cursor: default; }
+.safety-links { margin: 0.4rem 0 0; padding-left: 1.1rem; overflow-wrap: anywhere; }
+/* Europe live watch (NowPage). Circles: PEGELONLINE gauges. Diamonds: GloFAS model points. */
+.eu-legend { display: grid; gap: 0.4rem; min-width: 0; }
+.eu-legend__group { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; min-width: 0; }
+.eu-legend__title { display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 600; font-size: 0.85rem; }
+.eu-shape { display: inline-block; width: 12px; height: 12px; flex: none; background: var(--gauge-unknown); border: 2px solid var(--marker-stroke); }
+.eu-shape--gauge { border-radius: 50%; }
+.eu-shape--model { transform: rotate(45deg); border-radius: 2px; width: 10px; height: 10px; }
+.eu-shape--ok { background: var(--risk-low); }
+.eu-shape--near { background: var(--risk-moderate); }
+.eu-shape--over { background: var(--risk-severe); }
+.eu-shape--unknown { background: var(--gauge-unknown); }
+.eu-model-icon { transform-origin: center; }
+.eu-model-icon::before { content: ""; position: absolute; inset: 1px; transform: rotate(45deg); border-radius: 2px; border: 2px solid var(--marker-stroke); background: var(--gauge-unknown); }
+.eu-model-icon--ok::before { background: var(--risk-low); }
+.eu-model-icon--near::before { background: var(--risk-moderate); }
+.eu-model-icon--over::before { background: var(--risk-severe); }
+.eu-model-icon--sample::before { border-style: dashed; }
+.eu-list { display: grid; gap: 0.4rem; min-width: 0; }
+.eu-list__sort { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.eu-sort { font: inherit; font-size: 0.8rem; padding: 0.15rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: inherit; cursor: pointer; }
+.eu-sort--on { background: var(--surface-2); font-weight: 600; }
+.eu-list__rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; max-height: 22rem; overflow-y: auto; min-width: 0; }
+.eu-row { width: 100%; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "shape place band" "shape value value"; align-items: center; gap: 0.1rem 0.5rem; text-align: left; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.35rem 0.5rem; cursor: pointer; }
+.eu-row:hover, .eu-row:focus-visible { background: var(--surface-2); }
+.eu-row .eu-shape { grid-area: shape; }
+.eu-row__place { grid-area: place; overflow-wrap: anywhere; min-width: 0; }
+.eu-row__value { grid-area: value; overflow-wrap: anywhere; min-width: 0; }
+.eu-row__band { grid-area: band; white-space: nowrap; }
+
+/* System page (SystemPanel.tsx). Two columns on a desktop, one on a phone; long ids wrap. */
+.system-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; align-items: start; }
+.system-card { min-width: 0; overflow-wrap: anywhere; }
+.system-card .kpis { grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); }
+.system-list { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.45rem; }
+.system-list li { background: var(--bg-sunken); border-radius: 10px; padding: 0.45rem 0.6rem; min-width: 0; }
+.system-text { margin: 0; font-size: 0.86rem; }
+.system-meta { margin: 0.3rem 0 0; font-size: 0.75rem; color: var(--muted); }
+@media (max-width: 760px) {
+  .system-grid { grid-template-columns: minmax(0, 1fr); }
+}

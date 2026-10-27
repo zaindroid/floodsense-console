@@ -38,9 +38,44 @@ WHERE level = 'paragraph'
 ORDER BY embedding <=> $1::vector
 LIMIT $3
 """.strip()
+# Generic (event_id NULL) passages, limited to an allowed doc_id list. $2 is a text[].
+_GENERIC_HALFVEC_SQL = """
+SELECT chunk_id, (embedding::halfvec(2048) <=> $1::halfvec(2048)) AS distance
+FROM rag.chunks
+WHERE level = 'paragraph'
+  AND embedding IS NOT NULL
+  AND event_id IS NULL
+  AND doc_id = ANY($2)
+ORDER BY embedding::halfvec(2048) <=> $1::halfvec(2048)
+LIMIT $3
+""".strip()
+_GENERIC_EXACT_SQL = """
+SELECT chunk_id, (embedding <=> $1::vector) AS distance
+FROM rag.chunks
+WHERE level = 'paragraph'
+  AND embedding IS NOT NULL
+  AND event_id IS NULL
+  AND doc_id = ANY($2)
+ORDER BY embedding <=> $1::vector
+LIMIT $3
+""".strip()
+
+# At most this many generic passages are appended after the event top k.
+GENERIC_MAX = 2
+# Generic passages are added only for an insurer role or an insurance-type question.
+_INSURER_WORDS = re.compile(
+    r"\b(insur\w*|versicher\w*|seguro\w*|protection gap|insured loss(?:es)?"
+    r"|economic loss(?:es)?|claims paid|polic(?:y|ies))\b",
+    re.IGNORECASE,
+)
+# Event country. rag.chunks has no country column, so the allowed generic doc_ids
+# come from rag_scope.json, which scripts/rag_corpus.py writes from corpus/manifest.yaml.
+_EVENT_COUNTRY = {"EMSR773": "ES", "EMSR517": "DE"}
+_SCOPE_FILE = Path(__file__).resolve().parent / "rag_scope.json"
 
 Embedder = Callable[[list[str], str], list[list[float]]]
 Search = Callable[[list[float], str | None, int], list[tuple[str, float]]]
+GenericSearch = Callable[[list[float], list[str], int], list[tuple[str, float]]]
 Hydrate = Callable[[list[str]], tuple[str, list[dict]]]
 
 
@@ -76,8 +111,16 @@ def retrieve_docs(
     embedder: Embedder,
     search: Search,
     hydrate: Hydrate,
+    search_generic: GenericSearch | None = None,
+    scope: dict[str, str] | None = None,
 ) -> RetrieveResult:
-    """Embed the query, rank in Postgres, and hydrate text through Zetaris."""
+    """Embed the query, rank in Postgres, and hydrate text through Zetaris.
+
+    Inside an event run the event top k comes first and is never displaced. Then,
+    for an insurer role or an insurance-type question, at most GENERIC_MAX
+    event-agnostic passages are appended, limited to EU-wide documents and
+    documents of the event's country (`scope` maps doc_id to country).
+    """
     if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= 20:
         return RetrieveResult([], "k must be from 1 to 20")
     event_id, event_error = _event_id(filters)
@@ -93,6 +136,21 @@ def retrieve_docs(
         ranked = search(vectors[0], event_id, k)
     except Exception as exc:
         return RetrieveResult([], _short(exc))
+    ranked = list(ranked)[:k]
+    generic_ids: set[str] = set()
+    if event_id is not None and search_generic is not None and wants_generic(query, filters):
+        allowed = generic_doc_ids(event_id, load_scope() if scope is None else scope)
+        if allowed:
+            try:
+                extra = search_generic(vectors[0], allowed, GENERIC_MAX)
+            except Exception:
+                extra = []  # the event passages stand on their own
+            seen = {chunk_id for chunk_id, _distance in ranked}
+            for chunk_id, distance in list(extra)[:GENERIC_MAX]:
+                if chunk_id not in seen:
+                    ranked.append((chunk_id, distance))
+                    seen.add(chunk_id)
+                    generic_ids.add(chunk_id)
     if not ranked:
         return RetrieveResult([], None)
     ids = [chunk_id for chunk_id, _distance in ranked]
@@ -112,8 +170,78 @@ def retrieve_docs(
             continue
         citation = _citation(query_id, row)
         if citation is not None:
+            if chunk_id in generic_ids:
+                # event-agnostic passage: the Investigator gives it its own claim
+                citation["generic"] = True
             citations.append(citation)
     return RetrieveResult(citations, None)
+
+
+def wants_generic(query: str, filters: dict | None) -> bool:
+    """Insurer role, or a question about insurance, losses, claims, or policies."""
+    role = (filters or {}).get("role")
+    if isinstance(role, str) and role.lower() == "insurer":
+        return True
+    return bool(_INSURER_WORDS.search(query or ""))
+
+
+def generic_doc_ids(event_id: str, scope: dict[str, str]) -> list[str]:
+    """Event-agnostic doc_ids allowed in this event's run: EU-wide or same country."""
+    country = _EVENT_COUNTRY.get(event_id)
+    if country is None:
+        return []
+    return sorted(doc_id for doc_id, c in scope.items() if c in ("EU", country))
+
+
+_SCOPE_CACHE: dict[str, str] | None = None
+
+
+def load_scope() -> dict[str, str]:
+    """doc_id -> country of the event-agnostic documents. Read once per process."""
+    global _SCOPE_CACHE
+    if _SCOPE_CACHE is None:
+        import json
+
+        try:
+            data = json.loads(_SCOPE_FILE.read_text(encoding="utf-8"))
+            _SCOPE_CACHE = {str(k): str(v) for k, v in data.get("generic", {}).items()}
+        except (OSError, ValueError, AttributeError) as exc:
+            import logging
+
+            logging.getLogger("floodsense.retrieve_docs").warning(
+                "rag_scope.json missing or invalid (%s); no generic passages will be added",
+                exc.__class__.__name__,
+            )
+            _SCOPE_CACHE = {}
+    return _SCOPE_CACHE
+
+
+def default_search_generic(
+    vector: list[float], doc_ids: list[str], k: int
+) -> list[tuple[str, float]]:
+    dsn = os.environ.get("PGVECTOR_DSN", "")
+    if not dsn:
+        raise RuntimeError("PGVECTOR_DSN is not set")
+    try:
+        return _search_ids(dsn, _GENERIC_HALFVEC_SQL, vector, doc_ids, k)
+    except Exception as exc:
+        if "halfvec" not in str(exc).lower():
+            raise RuntimeError(_hide(str(exc), dsn)) from None
+        return _search_ids(dsn, _GENERIC_EXACT_SQL, vector, doc_ids, k)
+
+
+def _search_ids(
+    dsn: str, statement: str, vector: list[float], doc_ids: list[str], k: int
+) -> list[tuple[str, float]]:
+    sql = statement.replace("$1", "%(vector)s").replace("$2", "%(doc_ids)s").replace("$3", "%(k)s")
+    rendered = "[" + ",".join(str(item) for item in vector) + "]"
+    try:
+        with _connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {"vector": rendered, "doc_ids": list(doc_ids), "k": k})
+                return [(str(chunk_id), float(distance)) for chunk_id, distance in cur.fetchall()]
+    except Exception as exc:
+        raise RuntimeError(_hide(str(exc), dsn)) from None
 
 
 def default_embedder(texts: list[str], input_type: str) -> list[list[float]]:

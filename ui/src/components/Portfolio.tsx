@@ -3,6 +3,7 @@ import { SIMULATED_ALERT_M3S } from "../config/scenario";
 import { useConsole } from "../context/ConsoleContext";
 import { formatDay, formatEur } from "../lib/format";
 import { exposureStats, rowsOnDate } from "../lib/series";
+import { EVENT_META } from "../lib/events";
 import { OriginList } from "./Banners";
 
 /** Book KPIs (moved from the map card) and the in-footprint split by segment. */
@@ -13,6 +14,26 @@ export function Portfolio() {
     (row) => row.discharge_m3s >= SIMULATED_ALERT_M3S,
   ).length;
   const largest = stats.segments[0]?.sum ?? 0;
+
+  if (desk.eventId !== "EMSR773") {
+    return (
+      <div className="page-stack">
+        <section className="card" aria-label="Exposure">
+          <p className="section-label">Exposure · {EVENT_META[desk.eventId].short} · {desk.eventId}</p>
+          <h2>No insured book for this event</h2>
+          <p className="note">
+            The synthetic portfolio (exposure_join) is joined to the EMSR773 Valencia footprint only. There are no policies or
+            footprint rows for {desk.eventId}, so there is nothing to total here.
+          </p>
+          <div className="button-row">
+            <button type="button" className="button" onClick={() => desk.setEventId("EMSR773")}>
+              Show the Valencia book
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="page-stack">

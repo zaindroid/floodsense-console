@@ -25,13 +25,15 @@ GET  /version                      build sha and timestamp
 GET  /config                       flags, lanes, schema, checkpointer (no secrets)
 GET  /readiness                    the eight foundations checked against the newest run
 POST /runs                         RunRequest -> runs until the HITL interrupt; returns the run snapshot (status awaiting_approval)
+POST /front-door                   200 ReplyResponse for small talk, else {kind: run}; no graph run
+POST /runs?wait=false              202 {run_id, thread_id, status: running} at once; the graph runs in the background
 GET  /runs/past                    runs started by this process, newest first (the checkpointer holds every run's state)
 GET  /runs/{id}                    snapshot: contract state + claims, evidence, judge_summary, trace
 GET  /runs/{id}/replay             the same run labelled as a replay (served_from replay, cached_at its start)
 GET  /runs/{id}/approval           what the reviewer sees (409 unless awaiting approval)
 POST /runs/{id}/approval           ApprovalDecision {action: approve|edit|reject, edits?, reviewer_note?, reviewer?} -> resumes the run
 GET  /runs/{id}/citations          every citation record of the run plus the evidence and provenance they point at
-GET  /runs/{id}/events             SSE: the run's trace replayed in order, then one `status` event. POST /runs finishes the graph first, so this is not a live feed yet
+GET  /runs/{id}/events             SSE: `started` per node as it begins (background runs), `trace` per finished step, then one `status` event
 
     python -m floodsense_agents            # host: http://127.0.0.1:8100
 """
@@ -50,7 +52,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
 from floodsense_agents import __version__
-from floodsense_agents import desk, labelling
+from floodsense_agents import desk, front_door, labelling, router
 from floodsense_agents.events import ALIASES, EVENTS, HAZARD_VIEWS, hazard_schema, spec
 from floodsense_agents.models import ApprovalDecision, RunRequest
 from floodsense_agents.nightshift import available_providers
@@ -342,6 +344,8 @@ def config():
                 "FF_HITL": settings.ff_hitl,
                 "FF_HMEM": settings.ff_hmem,
                 "FF_RAG_DOCS": settings.ff_rag_docs,
+                # Router quick lane: part of the API cache fingerprint (app/cache.py).
+                "FF_QUICK_LANE": router.enabled(),
             },
             "lanes": {"fast": settings.lane("fast"), "deep": settings.lane("deep")},
             "engines_url": settings.engines_url,
@@ -357,9 +361,41 @@ def config():
     )
 
 
+def _front_door_reply(req: RunRequest) -> dict | None:
+    rt = runtime()
+    llm = getattr(rt.deps, "llm", None) if getattr(rt, "deps", None) is not None else None
+    return front_door.front_door(req, llm)
+
+
+@app.post("/front-door")
+def front_door_check(req: RunRequest):
+    """The front door alone: 200 ReplyResponse, or 200 {"kind": "run"} for the full run.
+
+    The API calls this before it spends a concurrency slot or a cache lookup.
+    """
+    reply = _front_door_reply(req)
+    return reply if reply is not None else {"kind": "run"}
+
+
 @app.post("/runs", status_code=201)
-def start_run(req: RunRequest):
+def start_run(req: RunRequest, wait: bool = True, front_door: bool = True):
+    """wait=true (default): run to the HITL pause and return the snapshot (201).
+
+    wait=false: 202 {run_id, thread_id, status: running} at once; the graph runs
+    in the background. Follow it on GET /runs/{id}/events or poll GET /runs/{id}.
+
+    Either way a greeting, help, thanks or off-topic message gets a 200
+    ReplyResponse ({"kind": "reply", ...}, no run_id) without a graph run.
+    front_door=false skips that check (the API has already made it).
+    """
+    if front_door:
+        reply = _front_door_reply(req)
+        if reply is not None:
+            return JSONResponse(reply, status_code=200)
     try:
+        if not wait:
+            accepted = runtime().start_async(req)
+            return JSONResponse(_envelope(accepted), status_code=202)
         return _envelope(runtime().start(req))
     except ThreadNotFound as e:
         raise HTTPException(404, f"thread {e.args[0]} not found; omit thread_id to start one")
@@ -411,10 +447,36 @@ def get_approval(run_id: str):
         raise HTTPException(409, str(e))
 
 
+def _check_edit(run: dict, decision: ApprovalDecision) -> None:
+    """422 unless an edit changes something, and only outbound drafts of this run."""
+    drafts = decision.draft_messages or {}
+    outbound = {a.get("action_id"): a for a in run.get("playbook") or [] if a.get("outbound")}
+    for aid, text in drafts.items():
+        if not (text or "").strip():
+            raise HTTPException(422, f"draft_messages[{aid}] is empty")
+        if aid not in outbound:
+            raise HTTPException(422, f"{aid} is not an outbound action of this run")
+    summary = (decision.edits or "").strip()
+    changes_summary = bool(summary) and summary != (run.get("summary") or "").strip()
+    changes_draft = any(
+        text.strip() != (outbound[aid].get("draft_message") or "").strip()
+        for aid, text in drafts.items()
+    )
+    if not (changes_summary or changes_draft):
+        raise HTTPException(422, "action=edit must change the summary or a draft_message")
+
+
 @app.post("/runs/{run_id}/approval")
 def post_approval(run_id: str, decision: ApprovalDecision):
-    if decision.action == "edit" and not (decision.edits or "").strip():
-        raise HTTPException(422, "action=edit requires edits")
+    if decision.action != "edit" and decision.draft_messages:
+        raise HTTPException(422, "draft_messages go with action=edit only")
+    if decision.action == "edit":
+        try:
+            run = runtime().snapshot(run_id)
+        except RunNotFound:
+            raise HTTPException(404, f"run {run_id} not found")
+        if run["status"] == "awaiting_approval":  # otherwise resume answers 409
+            _check_edit(run, decision)
     try:
         return _envelope(runtime().resume(run_id, decision))
     except RunNotFound:
@@ -440,9 +502,25 @@ async def events(run_id: str):
         raise HTTPException(404, f"run {run_id} not found")
 
     async def gen():
-        sent, t0 = 0, time.time()
+        sent, begun, t0 = 0, 0, time.time()
         while time.time() - t0 < 900:
-            s = rt.snapshot(run_id)
+            try:
+                s = await asyncio.to_thread(rt.snapshot, run_id)
+            except RunNotFound:
+                # A background run that died before its first checkpoint.
+                gone = {
+                    "run_id": run_id,
+                    "status": "not_found",
+                    "served_from": None,
+                    "cached_at": None,
+                }
+                yield f"event: status\ndata: {json.dumps(gone)}\n\n"
+                return
+            # Background runs only: a node has begun but not yet written its entry.
+            starts = rt.started(run_id)
+            for ev in starts[begun:]:
+                yield f"event: started\ndata: {json.dumps(ev)}\n\n"
+            begun = len(starts)
             for ev in s["trace"][sent:]:
                 yield f"event: trace\ndata: {json.dumps(ev)}\n\n"
             sent = len(s["trace"])
@@ -484,6 +562,9 @@ VIEW_COLUMNS: dict[str, dict[str, str]] = {
     }
     | {"is_stale": _BOOL},
     "exposure_join": {"lat": _NUM, "lon": _NUM, "sum_insured_eur": _NUM, "in_footprint": _BOOL},
+    "eu_watch": {
+        k: _NUM for k in ("lat", "lon", "discharge_m3s", "forecast_max_m3s", "past30_median_m3s")
+    },
     "provenance": {},
 }
 # No contract view has an event_id column today; the filter applies only if one does.
@@ -532,6 +613,7 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
         "sum_insured_eur",
         "segment",
     ),
+    "eu_watch": ("point_id", "name", "river", "lat", "lon", "band"),
     "provenance": ("dataset", "source_url", "publisher", "licence", "attribution", "fetched_at"),
 }
 

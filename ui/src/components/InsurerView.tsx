@@ -6,11 +6,15 @@ import { Drilldown } from "./Drilldown";
 import { MapPanel } from "./MapPanel";
 import { NowPage } from "./NowPage";
 import { Portfolio } from "./Portfolio";
+import { HowItWorks } from "./HowItWorks";
 import { ReviewColumn } from "./ReviewColumn";
+import { SystemPanel } from "./SystemPanel";
+import { useConsole } from "../context/ConsoleContext";
 import type { InsurerPage } from "../lib/route";
 
 /** One insurer page per hash. The old desk's parts, each on the page the IA gives it. */
 export function InsurerView({ page }: { page: InsurerPage }) {
+  const desk = useConsole();
   switch (page) {
     case "now":
       return <NowPage />;
@@ -28,11 +32,13 @@ export function InsurerView({ page }: { page: InsurerPage }) {
       return (
         <div className="insurer-top">
           <MapPanel exposureDefault />
-          <Drilldown />
+          {desk.eventId === "EMSR773" && <Drilldown />}
         </div>
       );
     case "alerts":
       return <Alerts />;
+    case "system":
+      return <SystemPanel />;
     case "review":
       return (
         <div className="page-stack">
@@ -41,5 +47,7 @@ export function InsurerView({ page }: { page: InsurerPage }) {
           <ReviewColumn />
         </div>
       );
+    case "how":
+      return <HowItWorks />;
   }
 }

@@ -2,6 +2,7 @@ import { CitizenActions, CitizenArea, CitizenEvidence, CitizenOverview } from ".
 import { InsurerView } from "./InsurerView";
 import { NowPage } from "./NowPage";
 import { DisasterReplay } from "./DisasterReplay";
+import { HowItWorks } from "./HowItWorks";
 import { pageLabel, type CitizenPage } from "../lib/route";
 import { useConsole } from "../context/ConsoleContext";
 
@@ -37,5 +38,7 @@ function CitizenBody({ page }: { page: CitizenPage }) {
       return <CitizenActions />;
     case "evidence":
       return <CitizenEvidence />;
+    case "how":
+      return <HowItWorks />;
   }
 }

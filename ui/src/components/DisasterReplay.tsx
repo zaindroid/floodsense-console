@@ -17,9 +17,11 @@ import {
   readingsAt,
   REPLAY_EVENTS,
   replayLabel,
-  type DisasterEvent,
   type ReplayReading,
 } from "../lib/disasterReplay";
+import { evidenceForReplay } from "../lib/liveEvidence";
+import { storyMoments } from "../lib/story";
+import { LiveSourceBadge } from "./LiveSources";
 
 const PLAY_MS = 220;
 /** Under prefers-reduced-motion, Play steps once a second instead of ~4.5 times. */
@@ -35,7 +37,7 @@ type EventData = EventRows;
 /** Disaster replay: scrub through Ahr 2021 or Valencia 2024 hour by hour. Never live. */
 export function DisasterReplay() {
   const desk = useConsole();
-  const [eventId, setEventId] = useState<DisasterEvent["eventId"]>("EMSR517");
+  const { eventId, setEventId } = desk;
   const event = REPLAY_EVENTS.find((e) => e.eventId === eventId) ?? REPLAY_EVENTS[0];
 
   // Ahr: Zetaris rows when the API serves AHR points, else the labelled bundled fixture.
@@ -93,6 +95,11 @@ export function DisasterReplay() {
     return frames.map((f) => byIso.get(f) ?? null);
   }, [data.rows, frames, point?.point_id]);
 
+  const citizen = desk.route === "citizen";
+  const [showData, setShowData] = useState(false);
+  const moments = useMemo(() => storyMoments(data.rows, data.points, frames, event, daily), [data, frames, event, daily]);
+  const maxRain = useMemo(() => Math.max(5, ...series.map((r) => r?.rain_mm ?? 0)), [series]);
+
   const ask = () => {
     if (!iso || !point) return;
     desk.openAsk(momentQuestionAt(point.name, iso, daily), {
@@ -130,10 +137,38 @@ export function DisasterReplay() {
         ))}
       </div>
 
+      {frames.length > 0 && citizen && (
+        <section className="dr-story" aria-labelledby="dr-story-title">
+          <h3 className="section-title" id="dr-story-title">
+            What happened
+          </h3>
+          <ol className="dr-moments">
+            {moments.map((m, i) => (
+              <li key={`${m.iso}-${m.pointId}-${m.topic}`}>
+                {m.text}{" "}
+                <LiveSourceBadge
+                  n={i + 1}
+                  evidence={evidenceForReplay(`${event.name} · ${data.points.find((p) => p.point_id === m.pointId)?.name ?? m.pointId}`, m.iso, data, m.topic, event.thresholdM3s)}
+                />
+              </li>
+            ))}
+          </ol>
+          <p className="note">Replay of a past event, not live. The alert line is FloodSense's own line, not an official threshold.</p>
+          <button
+            type="button"
+            className="button ghost"
+            aria-expanded={showData}
+            aria-controls="dr-data"
+            onClick={() => setShowData((v) => !v)}
+          >
+            {showData ? "Hide the data" : "Show the data"}
+          </button>
+        </section>
+      )}
       {frames.length === 0 ? (
         <p className="note">No readings for this window in the loaded rows.</p>
-      ) : (
-        <>
+      ) : !citizen || showData ? (
+        <div id="dr-data">
           <div className="dr-controls">
             <button type="button" className="dr-play" onClick={() => setPlaying((p) => !p)} aria-pressed={playing}>
               {playing ? "Pause" : "Play"}
@@ -178,6 +213,10 @@ export function DisasterReplay() {
             <strong>{iso ? `${momentText(iso)} UTC` : ""}</strong> · hour {at + 1} of {frames.length}
           </p>
 
+          <p className="dr-axis note" aria-hidden="true">
+            <span>rain (mm/h), top ↓</span>
+            <span>river flow (m³/s) ↑</span>
+          </p>
           <ReplayChart
             series={series}
             cursor={at}
@@ -191,6 +230,20 @@ export function DisasterReplay() {
               daily,
             )}
           />
+
+          <ul className="dr-legend" aria-label="Chart legend">
+            <li>
+              <span className="dr-legend__swatch dr-legend__swatch--rain" aria-hidden="true" /> Rain (mm/h), bars hang from the
+              top · top of chart = {maxRain.toFixed(0)} mm/h
+            </li>
+            <li>
+              <span className="dr-legend__swatch dr-legend__swatch--q" aria-hidden="true" /> River flow (m³/s), line from the
+              bottom
+            </li>
+            <li>
+              <span className="dr-legend__swatch dr-legend__swatch--thr" aria-hidden="true" /> {event.thresholdM3s} m³/s alert line
+            </li>
+          </ul>
 
           <table className="dr-table">
             <thead>
@@ -247,7 +300,14 @@ export function DisasterReplay() {
               : "Discharge and rain are hourly."}{" "}
             {data.source}
           </p>
-        </>
+        </div>
+      ) : null}
+      {citizen && frames.length > 0 && (
+        <div className="button-row">
+          <button type="button" className="dr-ask" onClick={ask} disabled={!point || !iso}>
+            Ask FloodSense about this flood
+          </button>
+        </div>
       )}
     </section>
   );

@@ -19,7 +19,8 @@ import math
 import re
 import time
 
-from floodsense_agents.events import hazard_schema, point_label
+from floodsense_agents.engines import memory_origin
+from floodsense_agents.events import WATCH_EVENT, hazard_schema, point_label
 from floodsense_agents.governance import DEFINITIONS, IN_FOOTPRINT_SQL
 from floodsense_agents.live import (
     GAUGE_LIVE_ROWS,
@@ -43,6 +44,13 @@ from floodsense_agents.prompts import INVESTIGATOR_LINK, compact_rows
 from floodsense_agents.provenance import rows_for as provenance_rows
 from floodsense_agents.settings import settings
 from floodsense_agents.state import Deps, FloodState, add_evidence, trace
+from floodsense_agents.watch import (
+    RHINE_WATERS,
+    all_sources,
+    is_watch_only,
+    sql_list,
+    watch_target,
+)
 from floodsense_agents.zetaris import now_utc, run_sql_parallel
 
 log = logging.getLogger("floodsense.investigator")
@@ -254,8 +262,8 @@ def memory_block(memories: list[dict] | None) -> str:
     if not memories:
         return ""
     lines = [
-        f"- {m.get('content', '')} (run {m.get('run_id', '?')}, relevance "
-        f"{float(m.get('relevance') or 0):.2f})"
+        f"- {'[demo seed] ' if memory_origin(m)[0] else ''}{m.get('content', '')} "
+        f"(run {m.get('run_id', '?')}, relevance {float(m.get('relevance') or 0):.2f})"
         for m in memories[:MEMORY_PROMPT_MAX]
     ]
     return (
@@ -806,7 +814,7 @@ def _rhine_live(
                 f"({points_sql(ev)}) AND {LIVE_ROWS}",
                 None,
             ),
-            (gauge_latest_sql(s), None),
+            (gauge_latest_sql(s, RHINE_WATERS), None),
             # One row even when the view is empty, so a "no reading" claim cites rows.
             (
                 f"SELECT COUNT(*) AS live_readings, COUNT(DISTINCT station) AS stations FROM "
@@ -855,6 +863,12 @@ def _rhine_live(
             )
         )
     stations = [r for r in gauges.rows_sample if r.get("level_cm") is not None]
+    # Stations the question names (Köln, Mainz) first, so the 8-row cut keeps them.
+    named = (watch_target(str((state.get("request") or {}).get("question") or "")) or {}).get(
+        "stations"
+    ) or []
+    if named:
+        stations.sort(key=lambda r: r.get("station") not in named)
     # The selected station (context) first. One the view does not hold is said plainly.
     picked = focus(state)["station"]
     if picked:
@@ -962,6 +976,206 @@ def _rhine_live(
         "hazard_now_german_rows": hazard_hours,
     }
     return hyps, claims, summary, [count, gauges, readings, *extra], findings
+
+
+def _num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _float(v) -> float | None:
+    """Zetaris REST returns numbers as strings. None when missing or not a finite number."""
+    if v is None or isinstance(v, bool) or v == "":
+        return None
+    try:
+        out = float(v)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _eu_watch_live(
+    state: FloodState, deps: Deps, target: dict
+) -> tuple[list[Hypothesis], list[Claim], str, list[Evidence], dict]:
+    """Europe live watch: the gauges and model points the question names.
+
+    PEGELONLINE gauges ({schema}.gauge_levels) are banded against the station's
+    MHW, an official characteristic value. GloFAS points ({schema}.eu_watch)
+    carry a model band relative to their own series, which is not an official
+    warning; every point claim says so. Each number a claim states is a cell of
+    the query it cites.
+    """
+    s, prov = settings.schema, state.get("provenance", [])
+    now = now_utc()
+    stations, points = tuple(target["stations"]), tuple(target["points"])
+    queries: list[tuple[str, None]] = []
+    if stations:
+        queries += [
+            (gauge_latest_sql(s, stations=stations), None),
+            (
+                f"SELECT COUNT(DISTINCT station) AS stations FROM {s}.gauge_levels WHERE "
+                f"{GAUGE_LIVE_ROWS} AND station IN ({sql_list(stations)})",
+                None,
+            ),
+        ]
+    if points:
+        queries.append(
+            (
+                f"SELECT point_id, name, country, river, discharge_m3s, forecast_max_m3s, "
+                f"past30_median_m3s, band, basis, as_of_date FROM {s}.eu_watch WHERE point_id "
+                f"IN ({sql_list(points)}) ORDER BY point_id",
+                None,
+            )
+        )
+    evs = run_sql_parallel(deps.zetaris, queries)
+    gauges, readings = (evs[0], evs[1]) if stations else (None, None)
+    model = evs[-1] if points else None
+    claims: list[Claim] = []
+    hid = "H1"
+
+    def claim(text, kind, ev, numbers):
+        cid = f"C{len(claims) + 1}"
+        claims.append(
+            Claim(
+                claim_id=cid,
+                text=text,
+                kind=kind,
+                numbers=numbers,
+                hypothesis_id=hid,
+                citations=cite(cid, ev, prov, 1),
+            )
+        )
+        return cid
+
+    ids: list[str] = []
+    parts: list[str] = []
+    at_risk: list[str] = []
+    stale_any = False
+    rows = [
+        {**r, **{k: _float(r.get(k)) for k in ("level_cm", "trend_cm_h", "mw_cm", "mhw_cm")}}
+        for r in (gauges.rows_sample if gauges else [])
+    ]
+    rows = [r for r in rows if r["level_cm"] is not None]
+    for r in rows:
+        stale = str(r.get("is_stale")).strip().lower() in ("true", "1", "yes")
+        stale_any = stale_any or stale
+        rel = relative(r["ts_utc"], now) or "time unreadable"
+        numbers = [r["level_cm"]]
+        text = (
+            f"{r['station']} ({r.get('water') or '?'}), PEGELONLINE gauge: "
+            f"{_fmt(r['level_cm'])} cm "
+            + (
+                f"(stale reading from {r['ts_utc']}, {rel})"
+                if stale
+                else f"at {r['ts_utc']} ({rel})"
+            )
+        )
+        if _num(r.get("trend_cm_h")):
+            numbers.append(r["trend_cm_h"])
+            text += f", trend {_fmt(r['trend_cm_h'])} cm/h"
+        band = str(r.get("band") or "unknown").lower()
+        mhw, mw = r.get("mhw_cm"), r.get("mw_cm")
+        if _num(mhw):
+            numbers.append(mhw)
+            text += f"; official threshold band '{band}' against MHW {_fmt(mhw)} cm"
+            if _num(mw):
+                numbers.append(mw)
+                text += f" (MW {_fmt(mw)} cm)"
+        else:
+            text += "; gauge_levels carries no MHW for this station"
+        if band in ("above", "near") and not stale:
+            at_risk.append(r["station"])
+        ids.append(
+            claim(text + f". Quelle: WSV, PEGELONLINE. {OFFICIAL_NOTE}", "number", gauges, numbers)
+        )
+        parts.append(f"{r['station']} {_fmt(r['level_cm'])} cm ({band} vs MHW)")
+    if stations and not rows:
+        n_live = _float((readings.rows_sample or [{}])[0].get("stations")) if readings else None
+        n_live = int(n_live) if n_live is not None else 0
+        ids.append(
+            claim(
+                f"{s}.gauge_levels holds no live PEGELONLINE reading for "
+                f"{', '.join(stations)} ({n_live} of them have one); the poller may not have "
+                f"run. {OFFICIAL_NOTE}",
+                "fact",
+                readings,
+                [n_live] if _num(n_live) else [],
+            )
+        )
+        parts.append(f"no live gauge reading for {', '.join(stations)}")
+    for r in model.rows_sample if model else []:
+        label = f"{r.get('river')} at {r.get('name')} ({r.get('country')}, {r.get('point_id')})"
+        q, fmax, med = (
+            _float(r.get(k)) for k in ("discharge_m3s", "forecast_max_m3s", "past30_median_m3s")
+        )
+        band = str(r.get("band") or "unknown").lower()
+        if not (_num(q) and _num(fmax) and _num(med)):
+            ids.append(
+                claim(
+                    f"{label}: {s}.eu_watch holds no current GloFAS value (band '{band}'), so "
+                    f"there is no model reading to report. Model, not an official warning.",
+                    "fact",
+                    model,
+                    [],
+                )
+            )
+            parts.append(f"{label}: no model reading")
+            continue
+        meaning = {
+            "above": "at least twice",
+            "near": "at least one and a half times",
+            "below": "less than one and a half times",
+        }.get(band, "not comparable with")
+        ids.append(
+            claim(
+                f"{label}: GloFAS model cell value {_fmt(q)} m3/s today ({r.get('as_of_date')}), 7-day "
+                f"forecast max {_fmt(fmax)} m3/s, {meaning} the exact past-30-day median "
+                f"{_fmt(med)} m3/s; model band '{band}'. Open-Meteo Flood API (GloFAS), CC BY "
+                f"4.0. Model, not an official warning; official: the national hydrological "
+                f"service and EFAS.",
+                "number",
+                model,
+                [q, fmax, med],
+            )
+        )
+        if band in ("above", "near"):
+            at_risk.append(label)
+        parts.append(f"{label} forecast max {_fmt(fmax)} m3/s, model band '{band}'")
+    statement = f"Europe live watch ({target['word']}): " + "; ".join(parts)
+    unknown = any("no model reading" in p or "no live gauge" in p or "(unknown" in p for p in parts)
+    if at_risk:
+        statement += f". Raised: {', '.join(at_risk)}"
+    elif unknown:
+        statement += ". No raised band among the readings available"
+    else:
+        statement += ". Nothing named is near or above its line"
+    hyps = [Hypothesis(id=hid, link="catchment->river", citations=ids, statement=statement)]
+    views = [v for v, on in (("gauge_levels", stations), ("eu_watch", points)) if on]
+    notes = []
+    if stations:
+        notes.append(
+            "Gauge bands use the official PEGELONLINE characteristic values (MHW). " + OFFICIAL_NOTE
+        )
+    if points:
+        notes.append(
+            "GloFAS bands compare the forecast with the point's own recent series: a model, "
+            "not an official warning; official: the national hydrological service and EFAS."
+        )
+    summary = (
+        f"Live data ({', '.join(f'{s}.{v}' for v in views)}, as of {now}). {statement} "
+        f"[{', '.join(ids)}]."
+        + (" STALE: a gauge reading is old." if stale_any else "")
+        + " "
+        + " ".join(notes)
+    )
+    findings = {
+        "now_utc": now,
+        "stale": stale_any,
+        "watch_hypothesis": hid,
+        "watch_stations": [r["station"] for r in rows],
+        "watch_points": [r.get("point_id") for r in (model.rows_sample if model else [])],
+        "watch_at_risk": at_risk,
+    }
+    return hyps, claims, summary, list(evs), findings
 
 
 LINK_ROWS = 8  # evidence rows per table in a per-link prompt
@@ -1243,52 +1457,69 @@ def _doc_text(raw: dict, limit: int = 220) -> str:
     return f'{title}{", " + where if where else ""}: "{excerpt.strip()}"'
 
 
-def _attach_documents(claims, raws, request, query):
-    """Append layer (c) citations to the named claim, or to a new fact claim C-doc."""
-    target_id = request.get("doc_claim_id")
-    target = next(
-        (item for item in claims if isinstance(target_id, str) and item.claim_id == target_id),
-        None,
-    )
-    if target is None:
-        # A document-only claim asserts what the top verified passage says, never
-        # the search query. No verifiable passage: no C-doc.
-        top = next((r for r in raws if _verified_raw(r)), None)
-        if top is None:
-            return claims, []
-        target = Claim(claim_id="C-doc", text=_doc_text(top), kind="fact")
-        claims = [*claims, target]
-    start = 1 + sum(1 for item in target.citations if item.layer == "c")
-    rows_for_q: dict[str, list[dict]] = {}
-    for offset, raw in enumerate(raws, start=start):
-        qid = raw.get("query_id") if isinstance(raw.get("query_id"), str) else None
-        chunk_id = raw.get("chunk_id") if isinstance(raw.get("chunk_id"), str) else None
-        target.citations.append(
-            Citation(
-                citation_id=f"{target.claim_id}-c{offset}",
-                claim_id=target.claim_id,
-                layer="c",
-                source_url=_text(raw, "source_url"),
-                title=_text(raw, "title"),
-                publisher=_text(raw, "publisher"),
-                licence=_text(raw, "licence"),
-                attribution=_text(raw, "attribution"),
-                locator=_doc_locator(raw),
-                quote=_text(raw, "quote"),
-                content_sha256=_text(raw, "content_sha256"),
-                storage="full_text",
-                query_id=qid,
-                chunk_id=chunk_id if chunk_id and len(chunk_id) <= 128 else None,
-                accessed_at=now_utc(),
-            )
+def _cite_passage(target, raw: dict, offset: int, rows_for_q: dict[str, list[dict]]) -> None:
+    """One layer (c) citation of `raw` on `target`, plus its evidence row sample."""
+    qid = raw.get("query_id") if isinstance(raw.get("query_id"), str) else None
+    chunk_id = raw.get("chunk_id") if isinstance(raw.get("chunk_id"), str) else None
+    target.citations.append(
+        Citation(
+            citation_id=f"{target.claim_id}-c{offset}",
+            claim_id=target.claim_id,
+            layer="c",
+            source_url=_text(raw, "source_url"),
+            title=_text(raw, "title"),
+            publisher=_text(raw, "publisher"),
+            licence=_text(raw, "licence"),
+            attribution=_text(raw, "attribution"),
+            locator=_doc_locator(raw),
+            quote=_text(raw, "quote"),
+            content_sha256=_text(raw, "content_sha256"),
+            storage="full_text",
+            query_id=qid,
+            chunk_id=chunk_id if chunk_id and len(chunk_id) <= 128 else None,
+            accessed_at=now_utc(),
         )
-        text = raw.get("text")
-        digest = raw.get("text_sha256")
-        if qid and isinstance(text, str) and isinstance(digest, str):
-            sample = {"text": text, "text_sha256": digest}
-            if chunk_id and len(chunk_id) <= 128:
-                sample["chunk_id"] = chunk_id
-            rows_for_q.setdefault(qid, []).append(sample)
+    )
+    text = raw.get("text")
+    digest = raw.get("text_sha256")
+    if qid and isinstance(text, str) and isinstance(digest, str):
+        sample = {"text": text, "text_sha256": digest}
+        if chunk_id and len(chunk_id) <= 128:
+            sample["chunk_id"] = chunk_id
+        rows_for_q.setdefault(qid, []).append(sample)
+
+
+def _attach_documents(claims, raws, request, query):
+    """Append layer (c) citations to the named claim, or to a new fact claim C-doc.
+
+    Event-agnostic passages (`generic`, e.g. EEA or EIOPA) never sit on a claim built
+    from an event passage: each verified one gets its own claim C-doc-g<n>, whose text
+    comes from that same passage. An unverifiable generic passage is dropped.
+    """
+    event_raws = [r for r in raws if not r.get("generic")]
+    generic_raws = [r for r in raws if r.get("generic") and _verified_raw(r)]
+    rows_for_q: dict[str, list[dict]] = {}
+    if event_raws:
+        target_id = request.get("doc_claim_id")
+        target = next(
+            (item for item in claims if isinstance(target_id, str) and item.claim_id == target_id),
+            None,
+        )
+        if target is None:
+            # A document-only claim asserts what the top verified passage says, never
+            # the search query. No verifiable passage: no C-doc.
+            top = next((r for r in event_raws if _verified_raw(r)), None)
+            if top is not None:
+                target = Claim(claim_id="C-doc", text=_doc_text(top), kind="fact")
+                claims = [*claims, target]
+        if target is not None:
+            start = 1 + sum(1 for item in target.citations if item.layer == "c")
+            for offset, raw in enumerate(event_raws, start=start):
+                _cite_passage(target, raw, offset, rows_for_q)
+    for number, raw in enumerate(generic_raws, start=1):
+        own = Claim(claim_id=f"C-doc-g{number}", text=_doc_text(raw), kind="fact")
+        _cite_passage(own, raw, 1, rows_for_q)
+        claims = [*claims, own]
     evidence = [
         Evidence(
             query_id=qid,
@@ -1334,7 +1565,13 @@ def make(deps: Deps):
             }
 
         findings = None
-        if is_live(state) and has_gauges(state["event"]):
+        if state.get("event_id") == WATCH_EVENT:
+            req = state.get("request") or {}
+            watch = watch_target(str(req.get("question") or ""), req.get("context"))
+            if not is_watch_only(watch):
+                watch = all_sources()
+            hyps, claims, summary, extra, findings = _eu_watch_live(state, deps, watch)
+        elif is_live(state) and has_gauges(state["event"]):
             hyps, claims, summary, extra, findings = _rhine_live(state, deps)
         elif is_live(state):
             hyps, claims, summary, extra, findings = _live_deterministic(state, deps)
@@ -1373,7 +1610,11 @@ def make(deps: Deps):
                     result = deps.retrieve_docs(
                         doc_query,
                         request.get("doc_k", 4),
-                        {"event_id": state.get("event_id")},
+                        {
+                            "event_id": state.get("event_id"),
+                            # an insurer role lets retrieve_docs add generic insurer passages
+                            "role": (request.get("context") or {}).get("role"),
+                        },
                     )
                 except Exception as exc:
                     doc_note += f" retrieve_docs error: {str(exc)[:200]}"

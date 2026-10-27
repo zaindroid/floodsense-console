@@ -72,6 +72,7 @@ JSON in, JSON out. Bad input is a 400 with `{ "error": ... }`, and a write is ch
 | `POST /hmem/recall` | `{ query, top_n?, threshold? }`: `top_n` 1 to 50 (default 5), `threshold` 0 to 1 (default 0.35) | `{ memories: [{ memory_id, content, relevance, confidence, run_id, claim_id, query_ids, provenance }], trace }` |
 | `POST /hmem/feedback` | `{ memory_id, kind }` with `kind` = `helpful`, `not_helpful` or `wrong` | `{ memory_id, confidence }` |
 | `GET /hmem/ledger?memory_id=` | | `{ entries }`, oldest first, each with `action`, `actor` and `at` |
+| `GET /hmem/memories?limit=` | `limit` 1 to 50 (default 5) | `{ total, memories: [{ memory_id, content, confidence, run_id, claim_id, event_id, tags, provenance }] }`, newest first; read-only, no recall and no ledger entry (the API's `GET /system`) |
 | `POST /wm/observations` | `{ anomalies?: [...], observations?: [{ external_id, title, at, source: { kind }, type?, text?, entities? }] }` | Ingest report; `changed` is `false` on a replay |
 | `POST /wm/hypotheses` | `{ run_id, at, by?, hypotheses: [...] }` | `{ board }` |
 | `GET /wm/board?run_id=` | | `{ board }` for one run, or all runs |

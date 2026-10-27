@@ -31,8 +31,12 @@ exposed policies, propose actions for the next 6, 24 and 72 hours. Each action c
 Mark outbound=true for anything that contacts a policyholder, a broker, a loss adjuster or an authority: those wait for
 human approval. Do not invent policies or numbers; only cite claim ids that exist. Language: {lang}.
 At most 4 actions, each text at most 30 words.
+For each action also give:
+- action_type: one of notify-policyholders | dispatch-loss-adjuster | flag-underwriting-review | inform-public
+- title: at most 6 words
 Reply with ONE JSON object:
-{"actions": [{"action_id": "A1", "horizon_h": 6, "text": "...", "claim_ids": ["C4"], "outbound": true}, ...]}"""
+{"actions": [{"action_id": "A1", "horizon_h": 6, "text": "...", "claim_ids": ["C4"], "outbound": true,
+  "action_type": "notify-policyholders", "title": "..."}, ...]}"""
 
 JUDGE = """TASK: judge
 You are an independent grounding judge. For ONE claim and the evidence rows it cites, decide:

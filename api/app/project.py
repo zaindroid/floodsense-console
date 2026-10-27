@@ -305,6 +305,28 @@ def _project_judge(body: dict[str, Any]) -> dict[str, Any] | None:
     return {"claims": claims, "overall_score": overall_score}
 
 
+_ACTION_TYPES = frozenset(
+    ("notify-policyholders", "dispatch-loss-adjuster", "flag-underwriting-review", "inform-public")
+)
+
+
+def _card_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Optional approval-card fields, copied only when well typed."""
+    out: dict[str, Any] = {}
+    if raw.get("action_type") in _ACTION_TYPES:
+        out["action_type"] = raw["action_type"]
+    for key in ("target_region", "draft_message"):
+        if isinstance(raw.get(key), str) and raw[key].strip():
+            out[key] = raw[key]
+    count = raw.get("affected_site_count")
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        out["affected_site_count"] = count
+    for key in ("outbound", "released"):
+        if isinstance(raw.get(key), bool):
+            out[key] = raw[key]
+    return out
+
+
 def _project_actions(
     body: dict[str, Any], run_id: str, citations: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -345,6 +367,7 @@ def _project_actions(
                 "title": title,
                 "detail": text.strip(),
                 "citation_ids": seen,
+                **_card_fields(raw),
             }
         )
     return out
@@ -440,6 +463,11 @@ def project_run(body: dict[str, Any]) -> dict[str, Any] | None:
         answer["playbook_actions"] = actions
     if judge is not None:
         answer["judge"] = judge
+    # Router lane (agents/floodsense_agents/router.py). Older runs carry none.
+    if body.get("lane") in ("quick", "full"):
+        answer["lane"] = body["lane"]
+    if isinstance(body.get("router_reason"), str) and body["router_reason"].strip():
+        answer["router_reason"] = body["router_reason"].strip()
     return {
         "answer": answer,
         "approvals": _project_approvals(body, run_id, actions, judge),

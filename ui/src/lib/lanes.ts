@@ -12,6 +12,22 @@ const ANSWERED_BY: Record<string, string> = {
   "nvidia/nemotron-3.5-lightning-30b-a3b": "answered by Nemotron 3.5 Lightning 30B A3B",
 };
 
+const PROVIDER_NAMES: Record<string, string> = { nightshift: "Nightshift", anthropic: "Anthropic (test switch)" };
+
+/**
+ * The one provider rule for model chips, pipeline badges and the live model line. The trace's explicit
+ * provider wins when present; only without one does the id decide: an nvidia/...nemotron... id is
+ * Nightshift, anthropic/... is the Anthropic test switch, anything else is not guessed.
+ */
+export function providerOf(modelId: string, explicit?: string | null): string | null {
+  const stated = (explicit ?? "").trim();
+  if (stated) return PROVIDER_NAMES[stated.toLowerCase()] ?? stated;
+  const id = modelId.toLowerCase();
+  if (id.startsWith("nvidia/") && id.includes("nemotron")) return "Nightshift";
+  if (id.startsWith("anthropic/")) return "Anthropic (test switch)";
+  return null;
+}
+
 export function laneLabel(modelId: string): string {
   return ANSWERED_BY[modelId] ?? modelId;
 }

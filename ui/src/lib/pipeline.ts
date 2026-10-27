@@ -1,9 +1,12 @@
 import type { RecordedRun, ReplayStep } from "../api/replay";
-import { laneLabel } from "./lanes";
+import { laneLabel, providerOf } from "./lanes";
 
 /** Canonical node order of the agent graph. world_model steps are folded into badges, not nodes. */
 export const PIPELINE_ORDER = [
+  "router",
   "scope",
+  "live_watch",
+  "quick_answer",
   "watchers",
   "memory",
   "investigator",
@@ -17,7 +20,10 @@ export const PIPELINE_ORDER = [
 export type PipelineNodeId = (typeof PIPELINE_ORDER)[number];
 
 export const NODE_LABELS: Record<PipelineNodeId, string> = {
+  router: "Router",
   scope: "Scope",
+  live_watch: "Live data",
+  quick_answer: "Quick answer",
   watchers: "Watchers",
   memory: "Memory",
   investigator: "Investigator",
@@ -43,6 +49,8 @@ export interface PipelineNode {
   latencyMs: number | null;
   lane: string | null;
   modelId: string | null;
+  /** Provider the trace states for this node's model step, when it does. */
+  provider: string | null;
   summary: string;
   /** How many times the node ran (a revise or repair loop runs it again). */
   runs: number;
@@ -64,6 +72,37 @@ export interface PipelineModel {
   totalLatencyMs: number;
 }
 
+/** The quick lane's steps (router.py): no Playbook, no human review. */
+export const QUICK_ORDER: readonly PipelineNodeId[] = ["router", "scope", "live_watch", "quick_answer", "judge"];
+/** Steps only the quick lane runs; a full run shows them only after an escalation. */
+const QUICK_ONLY: readonly PipelineNodeId[] = ["live_watch", "quick_answer"];
+
+/** The run status a person reads. A quick answer has no outbound action, so no human review. */
+export function statusText(status: string | null | undefined): string {
+  if (status === "answered") return "Answered (no human review needed: no outbound action)";
+  if (status === "awaiting_approval") return "Waiting for human review";
+  return status ? `Run status: ${status}` : "";
+}
+
+/** Pure: "escalated: ..." from the router trace, or null when the run did not escalate. */
+export function escalationOf(run: Pick<RecordedRun, "trace" | "routerReason">): string | null {
+  const step = [...run.trace].reverse().find((s) => s.node === "router" && /^escalated:/i.test(s.summary));
+  if (step) return step.summary;
+  const m = /escalated: .*/i.exec(run.routerReason ?? "");
+  return m ? m[0] : null;
+}
+
+/** Pure: which pipeline nodes a run shows, by its lane. */
+export function pipelineIds(run: Pick<RecordedRun, "trace" | "lane">): PipelineNodeId[] {
+  const ran = new Set(run.trace.map((s) => s.node));
+  if (run.lane === "quick") return [...QUICK_ORDER];
+  return PIPELINE_ORDER.filter((id) => {
+    if (QUICK_ONLY.includes(id)) return ran.has(id);
+    if (id === "router") return ran.has("router");
+    return true;
+  });
+}
+
 const isEdge = (step: ReplayStep) => /^revise edge|^repair edge/i.test(step.summary);
 
 /** True for a model id that is a real LLM, not "deterministic" or empty. */
@@ -74,14 +113,12 @@ function llmIds(modelId: string | null | undefined): string[] {
     .filter((m) => m && m !== "deterministic");
 }
 
-/**
- * Badge for an LLM id. "Nightshift" only when the trace step or the run states provider nightshift;
- * an nvidia id without that signal is "NVIDIA Nemotron" (it can also come through OpenRouter or NIM).
- */
+/** Badge for an LLM id, by the shared provider rule (`providerOf`): Nemotron ids are Nightshift, anthropic/ ids the test switch. */
 export function modelBadge(modelId: string, provider?: string | null): PipelineBadge {
   const label = laneLabel(modelId);
-  if ((provider ?? "").toLowerCase() === "nightshift") return { kind: "nightshift", text: `Nightshift · ${label}` };
-  if (modelId.startsWith("nvidia/")) return { kind: "model", text: `NVIDIA Nemotron · ${label}` };
+  const p = providerOf(modelId, provider);
+  if (p === "Nightshift") return { kind: "nightshift", text: `Nightshift · ${label}` };
+  if (p) return { kind: "model", text: `${p} · ${label}` };
   return { kind: "model", text: modelId };
 }
 
@@ -122,7 +159,8 @@ export function buildPipeline(run: RecordedRun): PipelineModel {
     run.trace.filter((s) => /^repair round/i.test(s.summary)).length,
   );
 
-  const nodes = PIPELINE_ORDER.map((id): PipelineNode => {
+  const escalated = escalationOf(run);
+  const nodes = pipelineIds(run).map((id): PipelineNode => {
     const steps = run.trace.filter((s) => s.node === id && !isEdge(s));
     const work = steps.filter((s) => s.latencyMs !== null && s.latencyMs !== undefined);
     const latencies = work.map((s) => s.latencyMs as number);
@@ -147,6 +185,10 @@ export function buildPipeline(run: RecordedRun): PipelineModel {
     let status: NodeStatus = steps.length ? "done" : "skipped";
     let summary = id === "investigator" || id === "playbook" ? main?.summary ?? "" : last?.summary ?? "";
     if (id === "judge" && steps.length && (run.judgePasses === false || /^FLAG/.test(last?.summary ?? ""))) status = "flag";
+    if (id === "router" && escalated) {
+      status = "flag";
+      summary = escalated;
+    }
     if (id === "approval") {
       if (run.status === "awaiting_approval") {
         status = "waiting";
@@ -166,6 +208,7 @@ export function buildPipeline(run: RecordedRun): PipelineModel {
       latencyMs: latencies.length ? latencies.reduce((a, c) => a + c, 0) : null,
       lane: main?.lane ?? null,
       modelId: main?.modelId ?? null,
+      provider: main?.provider ?? null,
       summary,
       runs: steps.length,
       badges,

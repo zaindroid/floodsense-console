@@ -304,6 +304,34 @@ export class FloodsenseEngines {
     };
   }
 
+  /**
+   * The newest memories, newest first. Read-only: unlike recall, it does not
+   * query H-MEM, so listing changes no access counts and writes no ledger entry.
+   */
+  memories(limit: unknown = 5): { total: number; memories: Record<string, unknown>[] } {
+    const n = integer(limit, "limit", 1, TOP_N_MAX);
+    const all = this.hmem.store.all();
+    const learned = (m: (typeof all)[number]) => m.provenance?.learnedAt ?? m.timestamp;
+    const newest = [...all].sort((a, b) => learned(b) - learned(a)).slice(0, n);
+    return {
+      total: all.length,
+      memories: newest.map((m) => ({
+        memory_id: m.id,
+        content: m.content,
+        confidence: m.confidence,
+        run_id: tagValue(m.tags, "run:"),
+        claim_id: tagValue(m.tags, "claim:"),
+        event_id: tagValue(m.tags, "event:"),
+        tags: m.tags,
+        provenance: {
+          origin: m.provenance?.origin ?? "",
+          learned_at: new Date(learned(m)).toISOString(),
+          label: m.provenance?.label ?? "",
+        },
+      })),
+    };
+  }
+
   feedback(memoryId: unknown, kind: unknown): { memory_id: string; confidence: number } {
     const id = text(memoryId, "memory_id");
     const k = oneOf(kind, FEEDBACK_KINDS, "kind");

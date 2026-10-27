@@ -1,9 +1,7 @@
-import { useEffect, useId, useRef, useState } from "react";
+﻿import { useEffect, useId, useRef, useState } from "react";
 import { useConsole } from "../context/ConsoleContext";
 import { useDismiss } from "../hooks/useDismiss";
-import { servingLabel } from "../lib/format";
-import { honestyChip, originPill } from "../lib/origin";
-import { OriginList, ServingLine } from "./Banners";
+import { headerSubtitle } from "../lib/events";
 import { applyTheme, readTheme, type ThemeName } from "../lib/theme";
 import { PROVIDER_LABELS, showProviderSelect, type LlmProvider } from "../lib/llmProvider";
 
@@ -12,19 +10,12 @@ export function Header() {
   const [theme, setTheme] = useState<ThemeName>(readTheme);
   const [bellOpen, setBellOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [chipOpen, setChipOpen] = useState(false);
-  const chipRef = useRef<HTMLDivElement>(null);
-  const chipTitle = useId();
-  const chipMenu = useId();
   const bellRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const bellTitle = useId();
   const profileTitle = useId();
   const unread = desk.notices.filter((notice) => !notice.read).length;
   const markNotificationsRead = desk.markNotificationsRead;
-  const origins = [desk.discharge.origin, desk.hazard.origin, desk.exposure.origin, desk.provenance.origin];
-  const rows = originPill(origins);
-  const chip = honestyChip(origins, servingLabel(desk.answer).kind);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -36,8 +27,6 @@ export function Header() {
 
   const closeBell = () => setBellOpen(false);
   const closeProfile = () => setProfileOpen(false);
-  const closeChip = () => setChipOpen(false);
-  useDismiss(chipOpen, closeChip, chipRef);
   useDismiss(bellOpen, closeBell, bellRef);
   useDismiss(profileOpen, closeProfile, profileRef);
 
@@ -57,7 +46,7 @@ export function Header() {
           </span>
           <div>
             <p className="product">FloodSense EU</p>
-            <p className="product-sub">Valencia replay · EMSR773</p>
+            <p className="product-sub">{headerSubtitle()}</p>
           </div>
         </div>
         <nav className="nav-links" aria-label="Workspace">
@@ -85,41 +74,6 @@ export function Header() {
               </select>
             </label>
           )}
-          <div className="menu-anchor chip-anchor" ref={chipRef}>
-            <button
-              type="button"
-              className={`pill pill-${chip.state}`}
-              data-state={chip.state}
-              aria-expanded={chipOpen}
-              aria-controls={chipOpen ? chipMenu : undefined}
-              aria-label={`Data status: ${chip.label}. Rows ${rows.label}.`}
-              onClick={() => {
-                setBellOpen(false);
-                setProfileOpen(false);
-                setChipOpen((open) => !open);
-              }}
-            >
-              {chip.label}
-            </button>
-            {chipOpen && (
-              <div className="menu menu-wide" id={chipMenu} role="region" aria-labelledby={chipTitle}>
-                <p className="menu-kicker" id={chipTitle}>
-                  {chip.label}
-                </p>
-                <p className="menu-body">
-                  {chip.state === "preview"
-                    ? `Rows on screen are ${rows.label.toLowerCase()}, not live views.`
-                    : chip.state === "cached"
-                      ? "Every view is live. The answer is cached or replayed."
-                      : "Every view is live and the answer is live."}
-                </p>
-                <p className="menu-title">Answer</p>
-                <ServingLine />
-                <p className="menu-title">Views</p>
-                <OriginList />
-              </div>
-            )}
-          </div>
           <button
             type="button"
             className="icon-button"
@@ -141,7 +95,6 @@ export function Header() {
               aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
               onClick={() => {
                 setProfileOpen(false);
-                setChipOpen(false);
                 setBellOpen((open) => !open);
               }}
             >
@@ -173,10 +126,9 @@ export function Header() {
               type="button"
               className="icon-button"
               aria-expanded={profileOpen}
-              aria-label="Account preview"
+              aria-label="Account"
               onClick={() => {
                 setBellOpen(false);
-                setChipOpen(false);
                 setProfileOpen((open) => !open);
               }}
             >
@@ -187,7 +139,6 @@ export function Header() {
                 <p className="menu-kicker" id={profileTitle}>
                   Account
                 </p>
-                <p className="menu-title">Preview session</p>
                 <p className="menu-body">Sign-in is not wired on this build. No credentials are collected.</p>
                 <button type="button" className="button" disabled>
                   Sign in

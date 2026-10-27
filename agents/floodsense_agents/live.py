@@ -12,6 +12,11 @@ resolve_mode() decides, deterministically:
   question about now      live (EN, ES, DE time words below)
   anything else           event
 
+A question about a Europe live-watch place (events.watch_question: a
+PEGELONLINE gauge off the Rhine/Mosel or a GloFAS point in {schema}.eu_watch,
+no replay-event place named, and a present cue or a level word with no past
+cue) is live too, and runs as event LIVE-EU.
+
 A German event (EMSR517) in live mode is "the Rhine right now": the
 Investigator reads {schema}.gauge_levels (PEGELONLINE) and says plainly when
 hazard_now holds no German point.
@@ -25,8 +30,15 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from floodsense_agents.events import AHR_POINT_IDS, VALENCIA_POINT_IDS
+from floodsense_agents.events import (
+    AHR_POINT_IDS,
+    VALENCIA_POINT_IDS,
+    WATCH_EVENT,
+    watch_question,
+)
+from floodsense_agents.watch import EU_POINT_IDS
 from floodsense_agents.settings import settings
+from floodsense_agents.watch import sql_list
 
 LIVE_DISABLED = (
     "live data disabled (FF_LIVE_DATA off): floodsense_seed.hazard_now holds the frozen "
@@ -87,6 +99,11 @@ def classify(question: str) -> tuple[str, str]:
     m = _LIVE_RE.search(question or "")
     if m:
         return LIVE, f"question asks about the present ('{m.group(0)}')"
+    # The Europe watch places (Budapest, the Elbe at Dresden) have no replay
+    # window: only their live views hold them.
+    target = watch_question(question or "")
+    if target:
+        return LIVE, f"question asks about a live-watch place ('{target['word']}')"
     return EVENT, "question names no present-time window"
 
 
@@ -121,6 +138,8 @@ def live_points(event: dict) -> tuple[str, ...]:
     """Every warehouse point of the event's region. hazard_now holds all of them."""
     if str(event.get("event_id")) == "EMSR517":
         return AHR_POINT_IDS
+    if str(event.get("event_id")) == WATCH_EVENT:
+        return EU_POINT_IDS
     return VALENCIA_POINT_IDS
 
 
@@ -186,16 +205,24 @@ def has_gauges(event: dict) -> bool:
     return bool(event.get("gauges"))
 
 
-def gauge_latest_sql(schema: str) -> str:
+def gauge_latest_sql(
+    schema: str, waters: tuple[str, ...] = (), stations: tuple[str, ...] = ()
+) -> str:
     """Latest live reading per station plus a trend baseline, every column kept.
 
     `g.*` so an optional threshold column comes along when the view has one.
+    waters / stations narrow it (the poller covers ten waterways since the EU watch).
     """
     lag = GAUGE_TREND_LAG
+    narrow = ""
+    if waters:
+        narrow += f" AND g.water IN ({sql_list(waters)})"
+    if stations:
+        narrow += f" AND g.station IN ({sql_list(stations)})"
     return (
         f"WITH r AS (SELECT g.*, ROW_NUMBER() OVER (PARTITION BY g.station ORDER BY g.ts_utc "
         f"DESC) AS rn, COUNT(*) OVER (PARTITION BY g.station) AS n FROM {schema}.gauge_levels g "
-        f"WHERE {GAUGE_LIVE_ROWS}) SELECT a.*, b.ts_utc AS prev_utc, b.level_cm AS prev_cm "
+        f"WHERE {GAUGE_LIVE_ROWS}{narrow}) SELECT a.*, b.ts_utc AS prev_utc, b.level_cm AS prev_cm "
         f"FROM r a LEFT JOIN r b ON b.station = a.station AND b.rn = CASE WHEN a.n < {lag} "
         f"THEN a.n ELSE {lag} END WHERE a.rn = 1 ORDER BY a.water, a.station"
     )
@@ -207,6 +234,11 @@ def gauge_threshold(row: dict) -> tuple[str, float] | None:
     mhw_cm (mean high water, PR #58 contract) first; otherwise any matching name.
     """
     mhw = row.get("mhw_cm")
+    if isinstance(mhw, str):  # Zetaris REST returns numbers as strings
+        try:
+            mhw = float(mhw)
+        except ValueError:
+            mhw = None
     if isinstance(mhw, (int, float)) and not isinstance(mhw, bool):
         return "mhw_cm", float(mhw)
     for key, value in row.items():

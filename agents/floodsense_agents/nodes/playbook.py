@@ -77,6 +77,112 @@ def _deterministic(state: FloodState) -> list[PlaybookAction]:
     ]
 
 
+ACTION_TYPES = (
+    "notify-policyholders",
+    "dispatch-loss-adjuster",
+    "flag-underwriting-review",
+    "inform-public",
+)
+TITLES = {
+    "notify-policyholders": "Notify exposed policyholders",
+    "dispatch-loss-adjuster": "Dispatch loss adjusters",
+    "flag-underwriting-review": "Flag for underwriting review",
+    "inform-public": "Inform the public",
+}
+# Fixed closing line per action type. No number, place or organisation.
+STEPS = {
+    "notify-policyholders": "Please keep yourself safe and keep records of any damage for your claim.",
+    "dispatch-loss-adjuster": "A loss adjuster will contact you to arrange a visit.",
+    "flag-underwriting-review": "This is flagged for underwriting review.",
+    "inform-public": "Please follow the instructions of the local authorities.",
+}
+DRAFT_CLAIMS_MAX = 3
+
+
+def infer_type(text: str) -> str | None:
+    """An action type from the action's own words, when the model gave none."""
+    t = (text or "").lower()
+    if "adjuster" in t:
+        return "dispatch-loss-adjuster"
+    if "policyholder" in t or "customer" in t:
+        return "notify-policyholders"
+    if any(w in t for w in ("public", "citizen", "resident", "authority", "authorities")):
+        return "inform-public"
+    if any(w in t for w in ("reserve", "underwrit", "review", "event file", "exposure join")):
+        return "flag-underwriting-review"
+    return None
+
+
+def affected_sites(state: FloodState) -> int | None:
+    """Distinct exposed sites from the Exposure node, or None when not knowable.
+
+    exposure.assets is a sample of at most 20 rows; the count is exact only
+    when the sample holds every policy (policies <= len(assets)). A failed
+    query or a footprint not published yet is unknown, not zero.
+    """
+    exp = state.get("exposure") or {}
+    qids = exp.get("query_ids") or []
+    if not qids:
+        return None
+    evidence = state.get("evidence") or {}
+    if any((evidence.get(q) or {}).get("error") for q in qids):
+        return None
+    h4 = next((h for h in state.get("hypotheses") or [] if h.get("id") == "H4"), {})
+    if "not published" in str(h4.get("statement") or ""):
+        return None
+    policies = int(exp.get("policies") or 0)
+    assets = [a for a in exp.get("assets") or [] if isinstance(a, dict)]
+    if policies == 0:
+        return 0
+    if len(assets) < policies:
+        return None
+    return len({a.get("site_id") for a in assets if a.get("site_id")})
+
+
+def draft_for(action: PlaybookAction, state: FloodState) -> str | None:
+    """The message an outbound action would send.
+
+    Deterministic only: a fixed template, the event region from the event
+    spec, the cited claims' texts verbatim and a fixed step per action type.
+    No model text reaches it, so it can state nothing the cited claims do not.
+    """
+    if not action.outbound:
+        return None
+    claims = {c["claim_id"]: c for c in state.get("claims") or []}
+    facts = [claims[i]["text"] for i in action.claim_ids if i in claims][:DRAFT_CLAIMS_MAX]
+    if not facts:
+        return None
+    # The region only: the event name carries a date, which no claim cites.
+    head = (state.get("event") or {}).get("region")
+    step = STEPS.get(action.action_type or "", "")
+    intro = f"FloodSense EU flood update ({head}). " if head else "FloodSense EU flood update. "
+    return intro + " ".join(facts) + (f" {step}" if step else "")
+
+
+def fill_card(
+    action: PlaybookAction,
+    state: FloodState,
+    raw: dict | None = None,
+) -> PlaybookAction:
+    """Approval-card fields. The model's values when valid, deterministic otherwise."""
+    raw = raw or {}
+    kind = raw.get("action_type")
+    if kind not in ACTION_TYPES:
+        kind = infer_type(action.text)
+    title = str(raw.get("title") or "").strip()[:80] or (TITLES.get(kind) if kind else None)
+    ev = state.get("event") or {}
+    out = action.model_copy(
+        update={
+            "action_type": kind,
+            "title": title or " ".join(action.text.split()[:6]).rstrip(".,;:"),
+            "target_region": ev.get("region") or None,
+            "affected_site_count": affected_sites(state),
+        }
+    )
+    # A model's draft_message is ignored: the draft is built, never written freely.
+    return out.model_copy(update={"draft_message": draft_for(out, state)})
+
+
 MAX_ACTIONS = 4  # the prompt asks for at most 4; more are cut, not shown
 TOP_ASSETS = 5  # largest exposed sites shown to the model
 
@@ -115,7 +221,7 @@ def make(deps: Deps):
         # from the same setting.
         if needs_repair(state):
             return _repair(state, deps, t)
-        actions = _deterministic(state)
+        actions = [fill_card(a, state) for a in _deterministic(state)]
         model_id = "deterministic"
         lane = "none"
         uncited = 0
@@ -128,12 +234,16 @@ def make(deps: Deps):
             js = parse_json(text)
             ids = {c["claim_id"] for c in state["claims"]}
             drafted = [
-                PlaybookAction(
-                    action_id=str(a["action_id"]),
-                    horizon_h=a["horizon_h"] if a.get("horizon_h") in (6, 24, 72) else 24,
-                    text=str(a["text"]),
-                    claim_ids=[i for i in a.get("claim_ids", []) if i in ids],
-                    outbound=bool(a.get("outbound", False)),
+                fill_card(
+                    PlaybookAction(
+                        action_id=str(a["action_id"]),
+                        horizon_h=a["horizon_h"] if a.get("horizon_h") in (6, 24, 72) else 24,
+                        text=str(a["text"]),
+                        claim_ids=[i for i in a.get("claim_ids", []) if i in ids],
+                        outbound=bool(a.get("outbound", False)),
+                    ),
+                    state,
+                    a,
                 )
                 for a in js.get("actions", [])[:MAX_ACTIONS]
             ]
@@ -208,8 +318,17 @@ def _repair(state: FloodState, deps: Deps, t: float) -> dict:
                 else "[repaired] This claim cited no evidence with rows and is withdrawn pending data."
             )
             c.numbers = []
+    # A draft that quoted a rewritten claim is rebuilt from the new wording.
+    repaired = {**state, "claims": [c.model_dump() for c in claims]}
+    playbook = []
+    for a in state.get("playbook") or []:
+        if flagged & set(a.get("claim_ids") or []):
+            act = PlaybookAction(**a)
+            a = {**a, "draft_message": draft_for(act, repaired)}
+        playbook.append(a)
     return {
-        "claims": [c.model_dump() for c in claims],
+        "playbook": playbook,
+        "claims": repaired["claims"],
         "repair_rounds": state.get("repair_rounds", 0) + 1,
         "trace": trace(
             state,

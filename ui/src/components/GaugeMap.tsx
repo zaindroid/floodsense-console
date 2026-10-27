@@ -6,13 +6,13 @@ import type { GaugeState } from "../hooks/useGaugeLevels";
 import { formatHour } from "../lib/format";
 import { statusLabel } from "../lib/origin";
 
-const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
+export const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+export const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
 
 const LEGEND: { status: GaugeStatus; label: string }[] = [
-  { status: "ok", label: "Below warning" },
-  { status: "near", label: "Near warning" },
-  { status: "over", label: "Above warning" },
+  { status: "ok", label: "Below MHW" },
+  { status: "near", label: "Near MHW" },
+  { status: "over", label: "Above MHW" },
   { status: "unknown", label: "No threshold" },
 ];
 

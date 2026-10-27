@@ -216,7 +216,23 @@
           "type": "array",
           "minItems": 1,
           "items": { "type": "string", "minLength": 1, "maxLength": 128 }
-        }
+        },
+        "action_type": {
+          "enum": ["notify-policyholders", "dispatch-loss-adjuster", "flag-underwriting-review", "inform-public", null],
+          "description": "Optional (v0.13). What kind of step this is, for the approval card."
+        },
+        "target_region": { "type": ["string", "null"], "description": "Optional. The event's region." },
+        "affected_site_count": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Optional. Distinct exposed sites from the Exposure query. Null when not knowable."
+        },
+        "draft_message": {
+          "type": ["string", "null"],
+          "description": "Optional. Exact text an outbound action would send. Sent only after approval; states only cited facts."
+        },
+        "outbound": { "type": "boolean", "description": "Optional. Contacts a person or authority: waits for approval." },
+        "released": { "type": "boolean", "description": "Optional. True once a reviewer approved or edited." }
       }
     },
     "approval": {
@@ -234,6 +250,22 @@
           "$ref": "#/$defs/judge",
           "description": "Present once the Judge has scored the run (v0.10.0). Optional before that."
         }
+      }
+    },
+    "memory_used": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One past approved finding H-MEM recalled for the Investigator. Context only, never evidence. seeded is true for items added by tasks.py demo-seed, not by an analyst.",
+      "required": ["memory_id", "text", "seeded"],
+      "properties": {
+        "memory_id": { "type": "string", "minLength": 1 },
+        "run_id": { "type": ["string", "null"] },
+        "claim_id": { "type": ["string", "null"] },
+        "approved_at": { "type": ["string", "null"] },
+        "text": { "type": "string" },
+        "relevance": { "type": ["number", "null"] },
+        "reviewer": { "type": ["string", "null"] },
+        "seeded": { "type": "boolean" }
       }
     },
     "answer_fields": {
@@ -267,7 +299,19 @@
           "type": "array",
           "items": { "$ref": "#/$defs/playbook_action" }
         },
-        "judge": { "$ref": "#/$defs/judge" }
+        "judge": { "$ref": "#/$defs/judge" },
+        "lane": {
+          "enum": ["quick", "full"],
+          "description": "Which agent path answered: quick (live watcher, deterministic template claims, deterministic Judge; no model call, no playbook, no HITL) or full (the deep investigation). Omitted by runs recorded before the router."
+        },
+        "router_reason": {
+          "type": "string",
+          "description": "Why the router chose the lane, and any escalation (\"escalated: ...\")."
+        },
+        "memory_used": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/memory_used" }
+        }
       }
     },
     "answer_cache_rule": {
@@ -287,6 +331,36 @@
       "allOf": [
         { "$ref": "#/$defs/answer_fields" },
         { "$ref": "#/$defs/answer_cache_rule" }
+      ]
+    },
+    "reply_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Front-door reply to POST /runs: a greeting, help, thanks or off-topic message answered without a graph run. No run_id, never cached as a run, never carries a flood fact.",
+      "required": ["kind", "intent", "answer", "suggestions", "model_id", "latency_ms"],
+      "properties": {
+        "kind": { "const": "reply" },
+        "intent": { "enum": ["greeting", "help", "thanks", "off_topic"] },
+        "answer": { "type": "string", "minLength": 1 },
+        "suggestions": {
+          "type": "array",
+          "maxItems": 3,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The fast-lane model that classified the message, or \"rules\"."
+        },
+        "latency_ms": { "type": "integer", "minimum": 0 },
+        "lane": { "const": "reply", "description": "The router lane: always reply here." }
+      }
+    },
+    "run_response": {
+      "description": "What POST /runs returns: a run snapshot (answer) or a front-door reply.",
+      "oneOf": [
+        { "$ref": "#/$defs/answer" },
+        { "$ref": "#/$defs/reply_response" }
       ]
     }
   }

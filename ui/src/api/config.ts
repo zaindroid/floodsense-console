@@ -15,3 +15,20 @@ export function apiTimeoutMs(): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return API_TIMEOUT_MS_DEFAULT;
   return parsed;
 }
+
+/** GET /config once (agents flags and lanes, passed through by the API). Never throws. */
+export async function fetchAgentsConfig(signal?: AbortSignal): Promise<{ kind: "ok"; body: unknown } | { kind: "down" }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), apiTimeoutMs());
+  const onAbort = () => ctrl.abort();
+  signal?.addEventListener("abort", onAbort);
+  try {
+    const r = await fetch(`${apiBaseUrl()}/config`, { signal: ctrl.signal, credentials: "omit" });
+    return r.ok ? { kind: "ok", body: await r.json() } : { kind: "down" };
+  } catch {
+    return { kind: "down" };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
