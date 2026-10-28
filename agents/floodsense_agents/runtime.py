@@ -15,6 +15,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from langgraph.types import Command
@@ -25,7 +26,6 @@ from floodsense_agents.events import route_event, spec
 from floodsense_agents.graph import build_deps, build_graph
 from floodsense_agents.hitl import approval_payload
 from floodsense_agents.models import ApprovalDecision, RunRequest
-from floodsense_agents.nightshift import current_provider
 from floodsense_agents.state import memory_used, normalise_trace, run_model_ids, trace
 from floodsense_agents.zetaris import now_utc
 
@@ -65,6 +65,8 @@ STATE_KEYS = (
     "error",
     "lane",
     "router_reason",
+    "forecast",
+    "plain",
 )
 
 
@@ -110,6 +112,17 @@ class Runtime:
         # Background runs of this process: run_id -> {"started": [...], "done": bool}.
         self.live: dict[str, dict[str, Any]] = {}
         self._live_lock = threading.Lock()
+        # Observers of the run lifecycle: fn(kind, run_id) with kind "paused" (a run left the
+        # graph call: awaiting approval, answered or failed) or "resumed" (a decision landed).
+        # The control tower listens; an observer never changes or blocks a run.
+        self.observers: list[Callable[[str, str], None]] = []
+
+    def _notify(self, kind: str, run_id: str) -> None:
+        for fn in list(self.observers):
+            try:
+                fn(kind, run_id)
+            except Exception as e:  # noqa: BLE001 - an observer must not break a run
+                log.warning("run observer failed: %s", str(e)[:120])
 
     @staticmethod
     def cfg(run_id: str) -> dict:
@@ -259,8 +272,8 @@ class Runtime:
         return [turn_of(self.snapshot(r["run_id"])) for r in rows[-THREAD_TURNS_MAX:]]
 
     def start(self, req: RunRequest) -> dict[str, Any]:
-        run_id, inputs, provider = self._prepare(req)
-        self._execute(run_id, inputs, provider)
+        run_id, inputs = self._prepare(req)
+        self._execute(run_id, inputs)
         return self.snapshot(run_id)
 
     def start_async(self, req: RunRequest) -> dict[str, Any]:
@@ -269,11 +282,11 @@ class Runtime:
         Request errors (unknown event, unknown thread) still raise here, before
         anything is accepted.
         """
-        run_id, inputs, provider = self._prepare(req)
+        run_id, inputs = self._prepare(req)
         self._track(run_id)
         threading.Thread(
             target=self._execute,
-            args=(run_id, inputs, provider),
+            args=(run_id, inputs),
             kwargs={"stream": True},
             name=f"run-{run_id}",
             daemon=True,
@@ -293,11 +306,8 @@ class Runtime:
                     {"run_id": run_id, "node": name, "phase": "started", "ts": now_utc()}
                 )
 
-    def _execute(
-        self, run_id: str, inputs: dict[str, Any], provider: str, *, stream: bool = False
-    ) -> None:
+    def _execute(self, run_id: str, inputs: dict[str, Any], *, stream: bool = False) -> None:
         self._track(run_id)
-        token = current_provider.set(provider)
         try:
             if stream:
                 for chunk in self.graph.stream(inputs, self.cfg(run_id), stream_mode="debug"):
@@ -316,13 +326,13 @@ class Runtime:
             except Exception as e2:  # noqa: BLE001 - the in-memory mark stands
                 log.warning("run %s: could not record the failure: %s", run_id, str(e2)[:120])
         finally:
-            current_provider.reset(token)
             with self._live_lock:
                 self.live[run_id]["done"] = True
             try:
                 self._index_row(run_id)
             except Exception as e3:  # noqa: BLE001 - listing is best effort
                 log.warning("run %s: could not index: %s", run_id, str(e3)[:120])
+            self._notify("paused", run_id)
 
     def _track(self, run_id: str) -> None:
         """Register a run in self.live, dropping the oldest finished ones past LIVE_MAX."""
@@ -332,7 +342,7 @@ class Runtime:
             for k in done[: max(0, len(self.live) - LIVE_MAX)]:
                 del self.live[k]
 
-    def _prepare(self, req: RunRequest) -> tuple[str, dict[str, Any], str]:
+    def _prepare(self, req: RunRequest) -> tuple[str, dict[str, Any]]:
         run_id = uuid.uuid4().hex[:12]
         # A Rhine / Köln / Ahr question on the default event runs on EMSR517.
         routed, route_why = route_event(
@@ -374,23 +384,19 @@ class Runtime:
             "repair_rounds": 0,
             "model_ids": [],
         }
-        return run_id, inputs, req.llm_provider
+        return run_id, inputs
 
     def resume(self, run_id: str, decision: ApprovalDecision) -> dict[str, Any]:
         s = self.snapshot(run_id)
         if s["status"] != "awaiting_approval":
             raise NotAwaitingApproval(f"run {run_id} is {s['status']}, not awaiting approval")
-        provider = (s.get("request") or {}).get("llm_provider") or "nightshift"
-        token = current_provider.set(provider)
-        try:
-            self.graph.invoke(Command(resume=decision.model_dump()), self.cfg(run_id))
-        finally:
-            current_provider.reset(token)
+        self.graph.invoke(Command(resume=decision.model_dump()), self.cfg(run_id))
         out = self.snapshot(run_id)
         # N1: store used to run here on every approval, FF_HMEM or not. It now
         # runs in the graph's Learn node (nodes/memory.py), behind FF_HMEM, so
         # the write shows on the trace and a resumed graph stores exactly once.
         self._index_row(run_id)
+        self._notify("resumed", run_id)
         return out
 
     def _rebuild_index(self) -> bool:

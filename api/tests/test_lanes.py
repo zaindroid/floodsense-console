@@ -101,6 +101,71 @@ class ProjectionTest(unittest.TestCase):
         self.assertFalse(finished_well(full))  # a full run still needs a person
 
 
+def forecast_run(run_id: str = "f1") -> dict:
+    run = quick_run(run_id)
+    run["lane"] = "forecast"
+    run["router_reason"] = "chose forecast: forecast question ('next 48 hours') about KÖLN"
+    run["forecast"] = {
+        "status": "Normal",
+        "places": ["KÖLN"],
+        "horizon_h": 48,
+        "outlook": "Calm at KÖLN.",
+        "outlook_label": "Outlook (model-written)",
+        "disclaimer": "This is a model outlook, not an official warning; follow DWD warnings.",
+    }
+    return run
+
+
+class ForecastLaneTest(unittest.TestCase):
+    def test_forecast_lane_and_status_pass_through(self) -> None:
+        answer = project_run(forecast_run())["answer"]
+        self.assertEqual(answer["lane"], "forecast")
+        self.assertEqual(answer["forecast"]["status"], "Normal")
+        self.assertIn("not an official warning", answer["forecast"]["disclaimer"])
+
+    def test_forecast_answer_is_cached_like_a_quick_one(self) -> None:
+        self.assertTrue(finished_well(forecast_run()))
+        from app.cache import quick_answered
+
+        self.assertTrue(quick_answered(forecast_run()))
+        escalated = forecast_run()
+        escalated["status"] = "awaiting_approval"
+        self.assertFalse(quick_answered(escalated))
+
+    def test_forecast_object_only_on_the_forecast_lane(self) -> None:
+        body = forecast_run()
+        body["lane"] = "full"
+        self.assertNotIn("forecast", project_run(body)["answer"])
+
+    def test_plain_object_passes_through_on_quick_and_forecast_only(self) -> None:
+        plain = {
+            "headline": "Nothing alarming expected at Köln.",
+            "one_line": "The Rhine at Köln is below its usual high-water mark.",
+            "horizon": "48h",
+            "status": "normal",
+            "next_step": "Ask me about another place or open the official warnings.",
+            "disclaimer": "Model-based check, not an official warning. Follow DWD.",
+            "details": ["Q1"],
+        }
+        for lane, make in (("forecast", forecast_run), ("quick", quick_run)):
+            body = make()
+            body["plain"] = plain
+            self.assertEqual(project_run(body)["answer"]["plain"], plain, lane)
+        body = forecast_run()
+        body["plain"] = plain
+        body["lane"] = "full"
+        self.assertNotIn("plain", project_run(body)["answer"])
+        body = forecast_run()
+        body["plain"] = {}
+        self.assertNotIn("plain", project_run(body)["answer"])
+
+    def test_forecast_flag_is_in_the_cache_fingerprint(self) -> None:
+        from app.cache import fingerprint
+
+        on = fingerprint({"flags": {"FF_FORECAST_LANE": True}})
+        self.assertNotEqual(on, fingerprint({"flags": {"FF_FORECAST_LANE": False}}))
+
+
 class QuickCacheTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runs = {"q1": quick_run()}

@@ -22,6 +22,7 @@ import {
 import { evidenceForReplay } from "../lib/liveEvidence";
 import { storyMoments } from "../lib/story";
 import { LiveSourceBadge } from "./LiveSources";
+import { ChoosePast } from "./ModeSwitch";
 
 const PLAY_MS = 220;
 /** Under prefers-reduced-motion, Play steps once a second instead of ~4.5 times. */
@@ -34,10 +35,25 @@ const reducedMotion = () =>
 
 type EventData = EventRows;
 
-/** Disaster replay: scrub through Ahr 2021 or Valencia 2024 hour by hour. Never live. */
+/**
+ * Disaster replay: scrub through the past flood chosen in the header (Ahr 2021 or Valencia 2024) hour by hour.
+ * Never live: in Live mode the page asks which flood to show, which switches the whole console to Past flood.
+ */
 export function DisasterReplay() {
+  const { mode } = useConsole();
+  if (mode === "live")
+    return (
+      <ChoosePast title="Replay shows a past flood">
+        You are on live data. Choose a flood to replay it hour by hour: the Ahr valley (July 2021) or Valencia (October 2024). This switches the
+        whole console to Past flood; switch back to Live in the header at any time.
+      </ChoosePast>
+    );
+  return <ReplayBody />;
+}
+
+function ReplayBody() {
   const desk = useConsole();
-  const { eventId, setEventId } = desk;
+  const { eventId } = desk;
   const event = REPLAY_EVENTS.find((e) => e.eventId === eventId) ?? REPLAY_EVENTS[0];
 
   // Ahr: Zetaris rows when the API serves AHR points, else the labelled bundled fixture.
@@ -123,20 +139,6 @@ export function DisasterReplay() {
           <p className={`dr-badge dr-badge-src${data.fromZetaris ? " is-zetaris" : ""}`}>{data.badge}</p>
         </div>
       </div>
-      <div className="dr-events" role="group" aria-label="Event">
-        {REPLAY_EVENTS.map((e) => (
-          <button
-            key={e.eventId}
-            type="button"
-            className={`dr-chip${e.eventId === eventId ? " is-on" : ""}`}
-            aria-pressed={e.eventId === eventId}
-            onClick={() => setEventId(e.eventId)}
-          >
-            {e.name} · {e.eventId}
-          </button>
-        ))}
-      </div>
-
       {frames.length > 0 && citizen && (
         <section className="dr-story" aria-labelledby="dr-story-title">
           <h3 className="section-title" id="dr-story-title">

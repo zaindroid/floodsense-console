@@ -49,7 +49,7 @@ class RouterRulesTest(unittest.TestCase):
     def test_live_questions_with_a_place_go_quick(self) -> None:
         for q, place in [
             (KOELN, "KÖLN"),
-            ("Is any Valencia point at risk in the next 48 hours?", "VALENCIA"),
+            ("Is any Valencia point at risk right now?", "VALENCIA"),
             ("Is the Danube at Budapest rising?", "BUDAPEST"),
             ("Is the Elbe in Dresden rising now?", "DRESDEN"),
         ]:
@@ -272,7 +272,7 @@ class QuickLaneTest(unittest.TestCase):
         self.assertIn("escalated: no live rows", snap["router_reason"])
 
     def test_valencia_forecast_from_hazard_now(self) -> None:
-        snap = self._run("Is Paiporta at risk in the next 48 hours?")
+        snap = self._run("Is Paiporta at risk right now?")
         self.assertEqual(
             (snap["lane"], snap["status"]), ("quick", "answered"), snap["router_reason"]
         )

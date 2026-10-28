@@ -6,7 +6,7 @@
  * Enum values are enforced by the schema tests, not by this assignment.
  */
 
-import type { Answer, Approval, Citation, Claim, Evidence, Judge, PlaybookAction } from "./index";
+import type { Answer, Approval, Citation, Claim, Evidence, Judge, Plain, PlaybookAction, WatchEvent } from "./index";
 
 type Wire<T> = T extends string
   ? string
@@ -29,7 +29,9 @@ import citation from "../examples/citation.json" with { type: "json" };
 import claim from "../examples/claim.json" with { type: "json" };
 import evidence from "../examples/evidence.json" with { type: "json" };
 import judge from "../examples/judge.json" with { type: "json" };
+import plain from "../examples/plain.json" with { type: "json" };
 import playbookAction from "../examples/playbook_action.json" with { type: "json" };
+import watchEvent from "../examples/watch_event.json" with { type: "json" };
 
 export const exampleClaim: Wire<Claim> = claim;
 export const exampleEvidence: Wire<Evidence> = evidence;
@@ -37,5 +39,7 @@ export const exampleCitation: Wire<Citation> = citation;
 export const exampleJudge: Wire<Judge> = judge;
 export const examplePlaybookAction: Wire<PlaybookAction> = playbookAction;
 export const exampleApproval: Wire<Approval> = approval;
+export const exampleWatchEvent: Wire<WatchEvent> = watchEvent;
 export const exampleAnswerLive: Wire<Answer> = answerLive;
 export const exampleAnswerReplay: Wire<Answer> = answerReplay;
+export const examplePlain: Wire<Plain> = plain;

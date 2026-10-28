@@ -1,16 +1,19 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchAgentsConfig } from "../api/config";
 import { fetchSystem } from "../api/system";
+import { fetchGaugeLevels } from "../api/gauges";
+import { TechTraceOverview } from "./TechTrace";
 import { useConsole } from "../context/ConsoleContext";
-import { boxStatuses, DOT_TEXT, feedsMode, humanBox, type BoxId, type ConfigProbe, type DotState } from "../lib/howItWorks";
+import { boxStatuses, DOT_TEXT, feedsMode, zetarisHealth, humanBox, type BoxId, type ConfigProbe, type DotState } from "../lib/howItWorks";
 import type { SystemStatus } from "../lib/system";
 
 const AGENTS = ["Scope", "Watchers", "Memory", "Investigator", "Skeptic", "Exposure", "Playbook", "Judge"];
 
-function Dot({ state }: { state: DotState }) {
+function Dot({ state, note }: { state: DotState; note?: string | null }) {
+  const text = note ? `${DOT_TEXT[state]}: ${note}` : DOT_TEXT[state];
   return (
-    <span className={`hiw-dot hiw-dot-${state}`} title={DOT_TEXT[state]}>
-      <span className="sr-only">Status: {DOT_TEXT[state]}</span>
+    <span className={`hiw-dot hiw-dot-${state}`} title={text}>
+      <span className="sr-only">Status: {text}</span>
     </span>
   );
 }
@@ -20,20 +23,24 @@ function Box({
   title,
   line,
   status,
+  note,
   children,
 }: {
   id: BoxId;
   title: string;
   line: string;
   status: Record<BoxId, DotState> | null;
+  /** Why the dot is not plain green (e.g. a rate limit). */
+  note?: string | null;
   children?: ReactNode;
 }) {
   return (
     <section className={`hiw-box hiw-box-${id}`} aria-label={title}>
       <p className="hiw-box-title">
-        <Dot state={status ? status[id] : "unknown"} /> {title}
+        <Dot state={status ? status[id] : "unknown"} note={note} /> {title}
       </p>
       <p className="hiw-box-line">{line}</p>
+      {note && <p className="note">{note}</p>}
       {children}
     </section>
   );
@@ -49,16 +56,17 @@ function Arrow({ label }: { label?: string }) {
 
 /** One page diagram of the system, with a live status dot per box from GET /config and GET /system. */
 export function HowItWorks() {
-  const [probes, setProbes] = useState<{ config: ConfigProbe; system: SystemStatus | null; systemError: string | null } | null>(null);
+  const [probes, setProbes] = useState<{ config: ConfigProbe; system: SystemStatus | null; systemError: string | null; gauge: "rows" | "empty" | "unavailable" | null } | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    void Promise.all([fetchAgentsConfig(controller.signal), fetchSystem(undefined, controller.signal)]).then(([config, sys]) => {
-      if (!controller.signal.aborted && !sys.aborted) setProbes({ config, system: sys.status, systemError: sys.error });
+    void Promise.all([fetchAgentsConfig(controller.signal), fetchSystem(undefined, controller.signal), fetchGaugeLevels(controller.signal)]).then(([config, sys, gauges]) => {
+      if (!controller.signal.aborted && !sys.aborted) setProbes({ config, system: sys.status, systemError: sys.error, gauge: gauges.state });
     });
     return () => controller.abort();
   }, []);
-  const status = probes ? boxStatuses(probes.config, probes.system) : null;
+  const status = probes ? boxStatuses(probes.config, probes.system, probes.gauge) : null;
   const mode = probes ? feedsMode(probes.config) : null;
+  const zetarisNote = probes ? zetarisHealth(probes.system?.viewsCache, probes.gauge).note : null;
   const { route } = useConsole();
   const human = humanBox(route);
   const intro =
@@ -75,11 +83,12 @@ export function HowItWorks() {
         </div>
       </div>
       <p className="hiw-legend note" aria-label="Status legend">
-        <Dot state="ok" /> running <Dot state="off" /> switched off <Dot state="down" /> not reachable <Dot state="unknown" />{" "}
+        <Dot state="ok" /> running <Dot state="partial" /> partly unavailable <Dot state="off" /> switched off <Dot state="down" /> not reachable <Dot state="unknown" />{" "}
         unknown
         {probes && !probes.system && " · component health (GET /system) is not available, so some dots are unknown"}
       </p>
 
+      <TechTraceOverview status={status} />
       <div className="hiw-flow">
         <p className="hiw-start">Your question</p>
         <Arrow />
@@ -111,6 +120,7 @@ export function HowItWorks() {
             title="Data via Zetaris"
             line={`Every number comes from a SQL query with an id you can open.${mode ? ` Now: ${mode}.` : ""}`}
             status={status}
+            note={zetarisNote}
           >
             <ul className="hiw-tags">
               <li>Open-Meteo GloFAS</li>

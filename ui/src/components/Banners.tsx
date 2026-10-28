@@ -58,7 +58,7 @@ function pick(rows: ProvenanceRow[], test: (dataset: string) => boolean): Proven
 }
 
 export function Colophon() {
-  const { provenance } = useConsole();
+  const { provenance, route } = useConsole();
   const rows = provenance.rows;
   const chosen = [
     pick(rows, (name) => name.includes("glofas") || name.includes("open-meteo flood")),
@@ -78,6 +78,11 @@ export function Colophon() {
       <p>Portfolio rows are synthetic. Modelled discharge is not an official warning.</p>
       <p>River gauges: PEGELONLINE (WSV), DL-DE-Zero-2.0, served through Zetaris. Map tiles: OpenStreetMap contributors (ODbL).</p>
       </details>
+      {route === "citizen" && (
+        <p>
+          <a href="#/citizen/tower">How we watch</a>: the rule-based watch loop and what it found, read-only.
+        </p>
+      )}
     </footer>
   );
 }

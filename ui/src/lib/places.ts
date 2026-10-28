@@ -7,8 +7,8 @@ import type { EventId } from "./events";
  * Valencia and Ahr replay places. Pure; the data comes from the views, nothing here is invented.
  */
 /**
- * Colour of a status chip. Red ("warning") is reserved for a gauge at or above its long-term mean high water;
- * model bands are amber or neutral, never red; the Valencia demo line is neutral until its 80 m³/s line.
+ * Colour of a status chip. Nothing is red: a gauge at or above its long-term mean high water and a model band that is
+ * far above normal are amber ("elevated"); the lower model bands are amber ("watch") or neutral.
  */
 export type Tone = "normal" | "watch" | "elevated" | "warning" | "neutral" | "unknown";
 
@@ -32,14 +32,14 @@ export function statusView(kind: WatchSource["kind"], status: GaugeStatus): Stat
   if (kind === "model")
     return status === "over" ? { word: "Elevated (model)", tone: "elevated", rank: 1 } : { word: "Watch (model)", tone: "watch", rank: 3 };
   return status === "over"
-    ? { word: "Above 80 m³/s demo line", tone: "elevated", rank: 4 }
-    : { word: "Above 20 m³/s demo line", tone: "neutral", rank: 5 };
+    ? { word: "Far above its recent normal (model)", tone: "elevated", rank: 4 }
+    : { word: "Above its recent normal (model)", tone: "neutral", rank: 5 };
 }
 
 /** What the status is measured against, shown next to the word so a model is never read as official. */
 export function basisLabel(kind: WatchSource["kind"]): string {
   if (kind === "gauge") return "measured · vs long-term mean high water (not a warning level)";
-  if (kind === "valencia") return "model · FloodSense demo line, not official";
+  if (kind === "valencia") return "model · compared with the point's own past three days, not official";
   return "model, not an official warning";
 }
 
@@ -63,11 +63,11 @@ export function calmSentence(kind: WatchSource["kind"], status: GaugeStatus, riv
     if (status === "ok") return `Our model shows normal river flow for ${where} over the next 7 days.`;
     if (status === "near")
       return `Our model shows river flow for ${where} somewhat above its recent 30-day normal over the next 7 days. Model, not an official warning.`;
-    return `Our model shows river flow for ${where} at least twice its recent 30-day normal over the next 7 days. That can be seasonal. Model, not an official warning.`;
+    return `Our model shows river flow for ${where} at least twice its recent 30-day normal over the next 7 days. Model, not an official warning.`;
   }
-  if (status === "ok") return `Our model shows river flow at ${name} below the FloodSense demo line of 20 m³/s (not official).`;
-  if (status === "near") return `Our model shows river flow at ${name} above the FloodSense demo line of 20 m³/s (not official).`;
-  return `Our model shows river flow at ${name} above the FloodSense demo line of 80 m³/s (not official). Check your official warning service.`;
+  if (status === "ok") return `Our model shows river flow at ${name} within its own recent normal (the past three days; not official).`;
+  if (status === "near") return `Our model shows river flow at ${name} at least twice its own recent normal (the past three days; not official).`;
+  return `Our model shows river flow at ${name} at least four times its own recent normal (the past three days; not official). Check your official warning service.`;
 }
 
 export interface Place {
@@ -260,3 +260,14 @@ export function headlineText(c: HeadlineCounts): string {
   return parts.join(" · ");
 }
 
+
+/**
+ * A replay day's status against the event's own replay line (REPLAY_EVENTS thresholdM3s, FloodSense's Watchers
+ * line, never an official threshold and never another event's demo line). Amber above the line, never red.
+ */
+export function replayStatus(m3s: number | null, threshold: number): StatusView {
+  if (m3s === null) return { word: "No reading", tone: "unknown", rank: 9 };
+  return m3s >= threshold
+    ? { word: `Above the ${threshold} m³/s FloodSense alert line`, tone: "elevated", rank: 4 }
+    : { word: `Below the ${threshold} m³/s FloodSense alert line`, tone: "normal", rank: 8 };
+}

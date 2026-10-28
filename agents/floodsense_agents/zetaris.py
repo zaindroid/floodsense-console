@@ -311,6 +311,7 @@ CREATE TABLE {s}.discharge_daily(point_id TEXT, date TEXT, discharge_m3s REAL, s
 CREATE TABLE {s}.exposure_join(policy_id TEXT, site_id TEXT, lat REAL, lon REAL, in_footprint INTEGER, sum_insured_eur REAL, segment TEXT);
 CREATE TABLE {s}.gauge_levels(station TEXT, water TEXT, ts_utc TEXT, level_cm REAL, source TEXT);
 CREATE TABLE {s}.eu_watch(point_id TEXT, name TEXT, country TEXT, river TEXT, lat REAL, lon REAL, discharge_m3s REAL, forecast_max_m3s REAL, past30_median_m3s REAL, band TEXT, basis TEXT, source TEXT, as_of_date TEXT);
+CREATE TABLE {s}.weather_forecast(point_id TEXT, kind TEXT, name TEXT, river TEXT, lat REAL, lon REAL, lead_h INTEGER, ts_utc TEXT, precip_mm REAL, model TEXT, source TEXT);
 CREATE TABLE {s}.provenance(dataset TEXT, source_url TEXT, publisher TEXT, licence TEXT, attribution TEXT, fetched_at TEXT);
 """
 
@@ -478,6 +479,14 @@ _SEED = {
             "2026-10-22",
         ),
         (
+            "weather_forecast",
+            "https://open-meteo.com/en/docs/dwd-api",
+            "Open-Meteo.com; model by Deutscher Wetterdienst (DWD)",
+            "CC BY 4.0",
+            "Weather data by Open-Meteo.com, model DWD ICON",
+            "2026-10-27",
+        ),
+        (
             "gauge_levels",
             "https://www.pegelonline.wsv.de/",
             "Wasserstrassen- und Schifffahrtsverwaltung des Bundes (WSV)",
@@ -512,6 +521,31 @@ def live_hazard_rows(now: datetime | None = None) -> list[tuple]:
     return rows
 
 
+def weather_forecast_rows(now: datetime | None = None, seed: bool = False) -> list[tuple]:
+    """floodsense.weather_forecast in the fake: 45 places x 72 hours from the current hour.
+
+    Test data, not a forecast: 0.1 mm every hour everywhere, except Chiva (VAL07),
+    whose rain follows the fake hazard_now (a 34 mm hour 18 h out). The seed twin
+    (072) is one row per place with no forecast.
+    """
+    from floodsense_agents.watch import FORECAST_POINTS
+
+    base = (now or datetime.now(timezone.utc)).replace(minute=0, second=0, microsecond=0)
+    model = "DWD ICON (icon_seamless) via Open-Meteo"
+    rows: list[tuple] = []
+    for pid, kind, _ref, name, river, lat, lon in FORECAST_POINTS:
+        if seed:
+            rows.append((pid, kind, name, river, lat, lon, None, None, None, model, "seed:openmeteo_forecast"))
+            continue
+        for h in range(72):
+            ts = (base + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rain = 0.1
+            if pid == "VAL07" and 14 <= h <= 21:
+                rain = (34.0 - 6.0 * abs(h - 18)) if abs(h - 18) <= 3 else 2.0
+            rows.append((pid, kind, name, river, lat, lon, h, ts, rain, model, "fake"))
+    return rows
+
+
 class FakeZetaris:
     def __init__(self) -> None:
         self._conn = sqlite3.connect(":memory:", check_same_thread=False)
@@ -524,6 +558,10 @@ class FakeZetaris:
                 self._conn.executemany(
                     f"INSERT INTO {schema}.{table} VALUES ({','.join('?' * len(rows[0]))})", rows
                 )
+            self._conn.executemany(
+                f"INSERT INTO {schema}.weather_forecast VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                weather_forecast_rows(seed=schema != "floodsense"),
+            )
             # The seed twin (040) is the frozen window labelled replay. Only the
             # live schema has a past and a forecast.
             if schema == "floodsense":

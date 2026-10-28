@@ -1,20 +1,28 @@
 import type { RouteId } from "../types/ui";
 
-/** Desk in the hash. Same two roles the header already switches. */
+/** Desk in the hash: the three roles the header switches. */
 export type RoleId = RouteId;
 
-export const CITIZEN_PAGES = ["now", "replay", "overview", "area", "actions", "evidence", "how"] as const;
-export const INSURER_PAGES = ["now", "replay", "approvals", "portfolio", "sites", "alerts", "review", "system", "how"] as const;
+export const CITIZEN_PAGES = ["now", "replay", "overview", "area", "actions", "evidence", "how", "tower"] as const;
+export const INSURER_PAGES = ["tower", "now", "replay", "approvals", "portfolio", "sites", "alerts", "review", "system", "how"] as const;
+
+/** Civil protection desk. Situation board first; its own approval queue; the shared how-it-works page. */
+export const OPERATOR_PAGES = ["situation", "approvals", "how"] as const;
 
 export type CitizenPage = (typeof CITIZEN_PAGES)[number];
 export type InsurerPage = (typeof INSURER_PAGES)[number];
-export type PageId = CitizenPage | InsurerPage;
+export type OperatorPage = (typeof OPERATOR_PAGES)[number];
+export type PageId = CitizenPage | InsurerPage | OperatorPage;
 
-export type DeskRoute = { role: "citizen"; page: CitizenPage } | { role: "insurer"; page: InsurerPage };
+export type DeskRoute =
+  | { role: "citizen"; page: CitizenPage }
+  | { role: "insurer"; page: InsurerPage }
+  | { role: "operator"; page: OperatorPage };
 
 export const DESK_NAV: {
   citizen: readonly { page: CitizenPage; label: string }[];
   insurer: readonly { page: InsurerPage; label: string }[];
+  operator: readonly { page: OperatorPage; label: string }[];
 } = {
   citizen: [
     { page: "now", label: "Now" },
@@ -26,6 +34,7 @@ export const DESK_NAV: {
     { page: "how", label: "How it works" },
   ],
   insurer: [
+    { page: "tower", label: "Control tower" },
     { page: "now", label: "Now" },
     { page: "replay", label: "Replay" },
     { page: "approvals", label: "Approvals" },
@@ -34,6 +43,11 @@ export const DESK_NAV: {
     { page: "alerts", label: "Alerts" },
     { page: "review", label: "Review" },
     { page: "system", label: "System" },
+    { page: "how", label: "How it works" },
+  ],
+  operator: [
+    { page: "situation", label: "Situation board" },
+    { page: "approvals", label: "Approvals" },
     { page: "how", label: "How it works" },
   ],
 };
@@ -97,16 +111,21 @@ export function parseHash(hash: string, approvalPending = true): DeskRoute {
   if (role === "insurer") {
     return { role, page: (token !== null && insurerPage(token)) || home.page };
   }
+  if (role === "operator") {
+    return { role, page: (token !== null && OPERATOR_PAGES.find((page) => page === token)) || "situation" };
+  }
   return home;
 }
 
-/** Citizen Overview keeps the short hash (`#/citizen`). Every other page, Approvals included, is `#/role/page`. */
+/** Citizen Overview and the operator Situation board keep the short hash. Every other page is `#/role/page`. */
 export function routeHref(role: RoleId, page: PageId): string {
   if (role === "citizen" && page === "overview") return "#/citizen";
+  if (role === "operator" && page === "situation") return "#/operator";
   return `#/${role}/${page}`;
 }
 
 export function pageLabel(route: DeskRoute): string {
+  if (route.page === "tower") return route.role === "citizen" ? "How we watch" : "Control tower";
   const items: readonly { page: PageId; label: string }[] = DESK_NAV[route.role];
   return items.find((item) => item.page === route.page)?.label ?? route.page;
 }

@@ -7,7 +7,6 @@ import { formatDay } from "../lib/format";
 import { escapeHtml } from "../lib/gauges";
 import { statusLabel } from "../lib/origin";
 import { datesOf, dischargeBand, rowsOnDate } from "../lib/series";
-import { REPLAY_EVENTS } from "../lib/disasterReplay";
 import {
   ahrDischarge,
   ahrMapPoints,
@@ -19,6 +18,7 @@ import {
   type MapPoint,
 } from "../lib/events";
 import type { ExposureJoinRow } from "../types/views";
+import { LiveSitesPanel } from "./LiveSitesMap";
 
 const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION =
@@ -30,10 +30,18 @@ const AHR_POINTS = ahrMapPoints();
 const NO_EXPOSURE: ExposureJoinRow[] = [];
 
 /**
- * Leaflet + OpenStreetMap map of the selected event's points, with the replay date slider.
- * `fixedEvent` pins the map to one event (the citizen My area page reads the Valencia views only).
+ * Insurer Sites / map follows the global mode: Live is the Europe view (every live watch source plus the insured sites
+ * layer); Past flood is the chosen event's replay map. `fixedEvent` pins the map to one event (the citizen My area page reads the
+ * Valencia views only) and never shows the live view.
  */
 export function MapPanel({ exposureDefault, fixedEvent }: { exposureDefault: boolean; fixedEvent?: EventId }) {
+  const desk = useConsole();
+  if (!fixedEvent && desk.mode === "live") return <LiveSitesPanel />;
+  return <EventMapPanel exposureDefault={exposureDefault} fixedEvent={fixedEvent} />;
+}
+
+/** Leaflet + OpenStreetMap map of the selected event's points, with the replay date slider. */
+function EventMapPanel({ exposureDefault, fixedEvent }: { exposureDefault: boolean; fixedEvent?: EventId }) {
   const desk = useConsole();
   const eventId = fixedEvent ?? desk.eventId;
   const ahr = eventId === "EMSR517";
@@ -51,7 +59,11 @@ export function MapPanel({ exposureDefault, fixedEvent }: { exposureDefault: boo
     () => (ahr || !showExposure ? NO_EXPOSURE : desk.exposure.rows.filter((row) => row.in_footprint)),
     [ahr, showExposure, desk.exposure.rows],
   );
-  const origin = ahr ? "seed rows (floodsense_seed, Open-Meteo GloFAS)" : statusLabel(desk.discharge.origin);
+  const origin = ahr
+    ? "seed rows (floodsense_seed, Open-Meteo GloFAS)"
+    : desk.discharge.origin === "live"
+      ? "Zetaris discharge_daily, replay rows"
+      : statusLabel(desk.discharge.origin);
 
   const rowsToday = useMemo(() => rowsOnDate(rows, date), [rows, date]);
   const byPoint = useMemo(() => new Map(rowsToday.map((row) => [row.point_id, row.discharge_m3s])), [rowsToday]);
@@ -74,7 +86,7 @@ export function MapPanel({ exposureDefault, fixedEvent }: { exposureDefault: boo
       <div className="card-head">
         <div>
           <p className="section-label">
-            Map · {EVENT_META[eventId].short} · {eventId}
+            Map · {EVENT_META[eventId].short}
           </p>
           <h2>Points on {formatDay(date)}</h2>
         </div>
@@ -91,23 +103,8 @@ export function MapPanel({ exposureDefault, fixedEvent }: { exposureDefault: boo
       </div>
       {ahr && (
         <p className="note" id={exposureNote}>
-          Exposed sites are off: no insured book is loaded for EMSR517.
+          Exposed sites are off: no insured book is loaded for Ahr 2021.
         </p>
-      )}
-      {!fixedEvent && (
-        <div className="dr-events" role="group" aria-label="Event">
-          {REPLAY_EVENTS.map((e) => (
-            <button
-              key={e.eventId}
-              type="button"
-              className={`dr-chip${e.eventId === eventId ? " is-on" : ""}`}
-              aria-pressed={e.eventId === eventId}
-              onClick={() => desk.setEventId(e.eventId)}
-            >
-              {EVENT_META[e.eventId].short} · {e.eventId}
-            </button>
-          ))}
-        </div>
       )}
       <div className="toolbar">
         <label className="field">

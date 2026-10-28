@@ -6,6 +6,8 @@
                                                                           └─ → hitl (interrupt) → learn → END
     scope ── in scope, lane=quick → live_watch → quick_answer → quick_judge ─┬─ pass → END (answered)
                                                                     └─ flag / no data → escalate → watchers
+    scope ── in scope, lane=forecast → forecast_data → history → forecast_answer → forecast_judge ─┬─ pass → END
+                                                                                     └─ flag / no data → escalate → watchers
 FF_SKEPTIC=false skips the Skeptic, FF_JUDGE=false skips the Judge, FF_HITL=false auto-approves (dev only).
 
 The engines sidecar (ENGINES_URL, engines/) joins in three places. The Watchers,
@@ -32,6 +34,7 @@ from floodsense_agents.engines import NoWorld, build_engines
 from floodsense_agents.nightshift import build_llm
 from floodsense_agents.nodes import (
     exposure,
+    forecast,
     investigator,
     judge,
     memory,
@@ -109,10 +112,35 @@ def build_graph(
     g.add_node("quick_answer", quick.quick_answer)
     g.add_node("quick_judge", quick.quick_judge)
     g.add_node("escalate", quick.escalate)
+    # lane=forecast (nodes/forecast.py): forecast data, history, deterministic claims
+    # plus one model outlook, the deterministic Judge; escalates like quick.
+    g.add_node("forecast_data", forecast.make_forecast_data(deps))
+    g.add_node("history", forecast.make_history(deps))
+    g.add_node("forecast_answer", forecast.make_forecast_answer(deps))
+    g.add_node("forecast_judge", quick.quick_judge)
     g.add_conditional_edges(
         "scope",
         quick.route_after_scope,
-        {"watchers": "watchers", "declined": END, "live_watch": "live_watch"},
+        {
+            "watchers": "watchers",
+            "declined": END,
+            "live_watch": "live_watch",
+            "forecast_data": "forecast_data",
+        },
+    )
+    g.add_conditional_edges(
+        "forecast_data",
+        forecast.route_after_forecast_data,
+        {"history": "history", "escalate": "escalate"},
+    )
+    g.add_edge("history", "forecast_answer")
+    g.add_conditional_edges(
+        "forecast_answer",
+        forecast.route_after_answer,
+        {"forecast_judge": "forecast_judge", "escalate": "escalate"},
+    )
+    g.add_conditional_edges(
+        "forecast_judge", quick.route_after_quick_judge, {"done": END, "escalate": "escalate"}
     )
     g.add_conditional_edges(
         "live_watch",

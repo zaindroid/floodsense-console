@@ -27,7 +27,7 @@ describe("parseHash", () => {
     expect(routeHref("citizen", "now")).toBe("#/citizen/now");
     expect(routeHref("insurer", "now")).toBe("#/insurer/now");
     expect(DESK_NAV.citizen[0].page).toBe("now");
-    expect(DESK_NAV.insurer[0].page).toBe("now");
+    expect(DESK_NAV.insurer[1].page).toBe("now"); // the Control tower is first on the insurer desk
   });
 
   it("treats a role with no page as that desk's home", () => {
@@ -94,7 +94,7 @@ describe("Replay page", () => {
     expect(routeHref("citizen", "replay")).toBe("#/citizen/replay");
     expect(routeHref("insurer", "replay")).toBe("#/insurer/replay");
     expect(DESK_NAV.citizen[1]).toEqual({ page: "replay", label: "Replay" });
-    expect(DESK_NAV.insurer[1]).toEqual({ page: "replay", label: "Replay" });
+    expect(DESK_NAV.insurer[2]).toEqual({ page: "replay", label: "Replay" });
     expect(pageLabel({ role: "insurer", page: "replay" })).toBe("Replay");
     expect(parseHash("#/replay")).toEqual({ role: "insurer", page: "approvals" });
   });
@@ -104,6 +104,7 @@ describe("DESK_NAV", () => {
   it("matches the approved IA", () => {
     expect(DESK_NAV.citizen.map((item) => item.label)).toEqual(["Now", "Replay", "Overview", "My area", "What to do", "Evidence", "How it works"]);
     expect(DESK_NAV.insurer.map((item) => item.label)).toEqual([
+      "Control tower",
       "Now",
       "Replay",
       "Approvals",
@@ -121,5 +122,39 @@ describe("DESK_NAV", () => {
   it("labels a route from the nav table", () => {
     expect(pageLabel({ role: "citizen", page: "actions" })).toBe("What to do");
     expect(pageLabel({ role: "insurer", page: "sites" })).toBe("Sites / map");
+  });
+});
+
+describe("Control tower page", () => {
+  it("is first on the insurer desk, reachable by hash on both, and never a home", () => {
+    expect(DESK_NAV.insurer[0]).toEqual({ page: "tower", label: "Control tower" });
+    expect(parseHash("#/insurer/tower")).toEqual({ role: "insurer", page: "tower" });
+    expect(parseHash("#/citizen/tower")).toEqual({ role: "citizen", page: "tower" });
+    expect(parseHash("#/insurer")).toEqual({ role: "insurer", page: "approvals" });
+    expect(parseHash("#/citizen")).toEqual({ role: "citizen", page: "overview" });
+    expect(routeHref("citizen", "tower")).toBe("#/citizen/tower");
+    // not in the citizen nav (the footer links it), and labelled for each desk
+    expect(DESK_NAV.citizen.some((item) => item.page === ("tower" as string))).toBe(false);
+    expect(pageLabel({ role: "insurer", page: "tower" })).toBe("Control tower");
+    expect(pageLabel({ role: "citizen", page: "tower" })).toBe("How we watch");
+  });
+});
+
+describe("operator desk", () => {
+  it("opens the Situation board at #/operator and reads its pages", () => {
+    expect(parseHash("#/operator")).toEqual({ role: "operator", page: "situation" });
+    expect(parseHash("#/operator/approvals")).toEqual({ role: "operator", page: "approvals" });
+    expect(parseHash("#/operator/how")).toEqual({ role: "operator", page: "how" });
+    expect(parseHash("#/operator/nonsense")).toEqual({ role: "operator", page: "situation" });
+    expect(parseHash("#/operator/situation/extra")).toEqual({ role: "operator", page: "situation" });
+    expect(routeHref("operator", "situation")).toBe("#/operator");
+    expect(routeHref("operator", "approvals")).toBe("#/operator/approvals");
+    expect(DESK_NAV.operator.map((i) => i.page)).toEqual(["situation", "approvals", "how"]);
+    expect(pageLabel({ role: "operator", page: "situation" })).toBe("Situation board");
+  });
+
+  it("leaves the other desks homes alone", () => {
+    expect(parseHash("")).toEqual({ role: "insurer", page: "approvals" });
+    expect(parseHash("#/citizen")).toEqual({ role: "citizen", page: "overview" });
   });
 });

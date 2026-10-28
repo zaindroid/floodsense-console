@@ -79,7 +79,7 @@ describe("plain status mapping", () => {
   it("never says Warning or uses red for a model band", () => {
     expect(statusView("model", "near")).toMatchObject({ word: "Watch (model)", tone: "watch" });
     expect(statusView("model", "over")).toMatchObject({ word: "Elevated (model)", tone: "elevated" });
-    expect(statusView("valencia", "near")).toMatchObject({ word: "Above 20 m³/s demo line", tone: "neutral" });
+    expect(statusView("valencia", "near")).toMatchObject({ word: "Above its recent normal (model)", tone: "neutral" });
     expect(statusView("valencia", "over").tone).toBe("elevated");
     for (const kind of ["model", "valencia"] as const)
       for (const st of ["ok", "near", "over", "unknown"] as const) {
@@ -103,8 +103,13 @@ describe("plain status mapping", () => {
     expect(calmSentence("model", "ok", "Danube", "Budapest")).toBe("Our model shows normal river flow for the Danube at Budapest over the next 7 days.");
     expect(calmSentence("gauge", "unknown", "Rhine", "Köln")).toMatch(/no current reading/);
     const v = calmSentence("valencia", "near", "", "Alfafar centre");
-    expect(v).toBe("Our model shows river flow at Alfafar centre above the FloodSense demo line of 20 m³/s (not official).");
+    expect(v).toBe("Our model shows river flow at Alfafar centre at least twice its own recent normal (the past three days; not official).");
     expect(v).not.toMatch(/usual/);
+  });
+  it("keeps the elevated model sentence free of a seasonal remark", () => {
+    const s = calmSentence("model", "over", "Loire", "Orleans");
+    expect(s).not.toMatch(/seasonal/i);
+    expect(s).toMatch(/Model, not an official warning\.$/);
   });
   it("sorts worst first and separates gauges from model points in the counts", () => {
     const order = worstFirst(sources).map((s) => s.name);

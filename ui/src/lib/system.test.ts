@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { SystemCards } from "../components/SystemPanel";
-import { countText, hitRate, laneLabel, liveSummary, modelName, parseSystem, providersLabel, shortUtc } from "./system";
+import { countText, hitRate, laneLabel, liveSummary, modelName, parseSystem, shortUtc } from "./system";
 
 const body = {
   counters_since_utc: "2026-10-27T08:00:00Z",
@@ -42,7 +42,6 @@ const body = {
   models: {
     ok: true,
     lanes: { fast: "meterless/fast", deep: "meterless/deep" },
-    llm_providers: ["nightshift"],
     latest_model_ids: ["nvidia/nemotron-3.5-lightning-30b-a3b"],
   },
   rag: { enabled: true, documents: null, passages: null },
@@ -57,7 +56,6 @@ describe("parseSystem", () => {
     expect(s.memory.latest[0].seeded).toBe(true);
     expect(s.memory.latest[1].seeded).toBe(false);
     expect(s.world.byStatus).toEqual({ supported: 1, challenged: 1 });
-    expect(s.models.providers).toEqual(["nightshift"]);
   });
 
   it("survives an empty or broken body", () => {
@@ -77,13 +75,10 @@ describe("helpers", () => {
     expect(hitRate(3, 1)).toBe("3 of 4 (75%)");
     expect(laneLabel("fast", "meterless/fast")).toBe("Fast lane: meterless/fast");
     expect(modelName("nvidia/nemotron-3.5-lightning-30b-a3b")).toBe("Nemotron 3.5 Lightning 30B A3B");
-    expect(modelName("anthropic/claude")).toBe("anthropic/claude");
+    expect(modelName("acme/model")).toBe("acme/model");
     expect(countText(null)).toBe("–");
     expect(shortUtc("2026-10-27T09:12:00.000Z")).toBe("27 Oct 09:12 UTC");
     expect(shortUtc(null)).toBe("–");
-    expect(providersLabel(["nightshift"])).toBe("Nightshift");
-    expect(providersLabel([])).toBe("Nightshift");
-    expect(providersLabel(["nightshift", "anthropic"])).toBe("Nightshift + Anthropic (test)");
   });
 
   it("keeps the live summary free of the clock", () => {

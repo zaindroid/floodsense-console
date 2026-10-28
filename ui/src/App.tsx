@@ -1,6 +1,7 @@
 import { ConsoleProvider } from "./context/ConsoleContext";
 import { AskFloodSense } from "./components/AskFloodSense";
 import { Colophon } from "./components/Banners";
+import { DemoOffer } from "./components/ModeSwitch";
 import { EvidenceDrawer } from "./components/EvidenceDrawer";
 import { Header } from "./components/Header";
 import { PageOutlet } from "./components/PageOutlet";
@@ -27,6 +28,7 @@ function Shell() {
           <button type="button" className="nav-backdrop" aria-label="Close pages" onClick={nav.close} />
         )}
         <ReplayBar />
+        <DemoOffer />
         <main id="content">
           <PageOutlet />
         </main>

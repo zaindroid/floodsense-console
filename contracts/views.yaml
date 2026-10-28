@@ -63,6 +63,21 @@ views:
     - {name: basis, type: string}
     - {name: source, type: string}
     - {name: as_of_date, type: date}
+  # min_rows: live 3240 (45 places x 72 forecast hours, rolling), seed 45 (positions only, no forecast).
+  # Forecast lane (070-072): hourly precipitation, Open-Meteo forecast API with the DWD ICON model.
+  # lead_h 0 is the current GMT hour. kind: gauge | eu | valencia. Model output, not a warning.
+  weather_forecast:
+    - {name: point_id, type: string}
+    - {name: kind, type: string}
+    - {name: name, type: string}
+    - {name: river, type: string}
+    - {name: lat, type: double}
+    - {name: lon, type: double}
+    - {name: lead_h, type: int}
+    - {name: ts_utc, type: timestamp}
+    - {name: precip_mm, type: double}
+    - {name: model, type: string}
+    - {name: source, type: string}
   # min_rows: 359 (live and seed). synthetic is the portfolio flag (yes). Not a live book.
   # Migration 018 is the column list verify checks once it is applied. 014 and 016 create the view first.
   exposure_join:
@@ -74,8 +89,8 @@ views:
     - {name: sum_insured_eur, type: double}
     - {name: segment, type: string}
     - {name: synthetic, type: string}
-  # min_rows: 8 cleared datasets. ds_dwd_brightsky stays in the CSV and is filtered out of the views.
-  # 041 is the count verify checks once it is applied. 015 and 017 create the view first.
+  # min_rows: 9 cleared datasets (073: 041's 8 plus the inline DWD ICON forecast row). ds_dwd_brightsky
+  # stays in the CSV and is filtered out of the views. 015 and 017 create the view first.
   provenance:
     - {name: dataset, type: string}
     - {name: source_url, type: string}

@@ -37,7 +37,7 @@ The agents find the service through **`ENGINES_URL`**:
 
 `compose.yaml` sets `ENGINES_URL=http://engines:8300` on the agents service. That value wins over `agents/.env`. The published host port is `127.0.0.1:${FLOODSENSE_ENGINES_PORT:-8300}`. Inside the container the process binds `0.0.0.0` (`ENGINES_HOST`), which compose sets so a laptop `engines/.env` of `127.0.0.1` cannot hide the port from the agents service. The host port stays on loopback.
 
-The Python client that reads `ENGINES_URL` lands with the agents. The key is commented in `agents/.env.example` until that client exists.
+The Python client that reads `ENGINES_URL` is `agents/floodsense_agents/engines.py`, called from `nodes/memory.py` and `nodes/world_model.py` (and by the forecast lane's history step for H-MEM recall).
 
 ## Check it
 

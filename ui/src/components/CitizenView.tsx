@@ -1,4 +1,5 @@
 import { useId, useMemo, useState } from "react";
+import { next48hQuestion } from "../api/ask";
 import { useConsole } from "../context/ConsoleContext";
 import { useLiveWatch, type LiveWatch } from "../hooks/useLiveWatch";
 import { plainLanguage } from "../lib/plain";
@@ -21,7 +22,6 @@ import { SafeLink } from "./SafeLink";
 import { SourceBadges, SourceLegend } from "./SourceBadges";
 import { answerEventId, sourceFromCitation } from "../lib/sources";
 import {
-  dischargeBand,
   glofasDischargeNote,
   hazardOnDate,
   peakRow,
@@ -32,6 +32,7 @@ import {
   seriesFor,
   sourceExplanation,
 } from "../lib/series";
+import { REPLAY_EVENTS } from "../lib/disasterReplay";
 import { ahrDischarge, ahrMapPoints, EVENT_META } from "../lib/events";
 import {
   basisLabel,
@@ -43,39 +44,46 @@ import {
   plainOf,
   questionForPlace,
   quickPlaces,
+  replayStatus,
   searchPlaces,
   worstFirst,
   type Place,
   type StatusView,
 } from "../lib/places";
 import { evidenceForSource, GAUGE_PIPELINE, GLOFAS_PIPELINE, HAZARD_NOW_PIPELINE } from "../lib/liveEvidence";
-import type { DischargeBand } from "../types/ui";
 import { CitationList, ProvenanceList } from "./EvidenceDrawer";
 import { MapPanel } from "./MapPanel";
 import { Sparkline } from "./Sparkline";
 import { LiveSourceBadge } from "./LiveSources";
 import { evidenceFor, metaFor, PlaceRow, PlacesToWatch, sourceTitle, StatusChip, timeText } from "./PlacesToWatch";
-import { EuWatchMap } from "./EuWatch";
+import { EuWatchLegend, EuWatchMap } from "./EuWatch";
+import { LoadingNote, SlowSourceNote } from "./Loading";
+import { LiveHealthNote } from "./ModeSwitch";
 
 const WHY_CLAIMS = 3;
-const MAX_MATCHES = 12;
+const MAX_MATCHES = 60;
 
-/** A replay day's discharge band in plain words (FloodSense demo cuts, never an official level; never red). */
-const BAND_VIEW: Record<DischargeBand, StatusView> = {
-  low: { word: "Normal flow", tone: "normal", rank: 8 },
-  typical: { word: "Normal flow", tone: "normal", rank: 8 },
-  elevated: { word: "Above 20 m³/s demo line", tone: "neutral", rank: 5 },
-  peak: { word: "Above 80 m³/s demo line", tone: "elevated", rank: 4 },
-};
-const NO_READING: StatusView = { word: "No reading", tone: "unknown", rank: 9 };
 
-/** The live views, the place list and the chosen place, shared by every citizen page. */
-function useCitizenPlace(): { live: LiveWatch; places: Place[]; place: Place | null; choose: (p: Place | null) => void } {
+/**
+ * The live views, the place list and the chosen place, shared by every citizen page. The global mode decides the
+ * list: Live offers the live-watch sources only; Past offers the points of the chosen flood only. In Past with
+ * nothing chosen, the event's default point is used, so a past page never shows a live place.
+ */
+export function useCitizenPlace(): { live: LiveWatch; places: Place[]; place: Place | null; choose: (p: Place | null) => void } {
   const desk = useConsole();
   const live = useLiveWatch();
   const ahr = useMemo(() => ahrMapPoints(), []);
-  const places = useMemo(() => buildPlaces(live.sources, desk.points, ahr), [live.sources, desk.points, ahr]);
-  const place = places.find((p) => p.id === desk.placeId) ?? null;
+  const past = desk.mode === "past";
+  const places = useMemo(
+    () =>
+      past
+        ? buildPlaces([], desk.eventId === "EMSR773" ? desk.points : [], desk.eventId === "EMSR517" ? ahr : [])
+        : buildPlaces(live.sources, [], []),
+    [past, desk.eventId, live.sources, desk.points, ahr],
+  );
+  const chosen = places.find((p) => p.id === desk.placeId) ?? null;
+  const fallbackId = past ? `replay:${desk.eventId === "EMSR517" ? desk.ahrPointId : desk.pointId}` : null;
+  const place = chosen ?? (fallbackId ? (places.find((p) => p.id === fallbackId) ?? places[0] ?? null) : null);
   const { setPlaceId, setPointId, setAhrPointId } = desk;
   const choose = (p: Place | null) => {
     setPlaceId(p ? p.id : null);
@@ -90,12 +98,13 @@ function placeLabel(p: Place): string {
   return p.river ? `${p.river} · ${p.name}` : p.name;
 }
 
-function PlacePicker({ places, place, choose, live }: ReturnType<typeof useCitizenPlace>) {
+export function PlacePicker({ places, place, choose, live }: ReturnType<typeof useCitizenPlace>) {
+  const { mode } = useConsole();
   const [query, setQuery] = useState("");
   const inputId = useId();
   const matches = query.trim() ? searchPlaces(places, query).slice(0, MAX_MATCHES) : [];
   const quick = useMemo(() => quickPlaces(places, live.sources, place?.id ?? null), [live.sources, places, place?.id]);
-  const list = query.trim() ? matches : quick;
+  const list = query.trim() ? matches : mode === "past" ? places : quick;
   return (
     <div className="location-picker">
       <label htmlFor={inputId} className="sr-only">
@@ -104,20 +113,22 @@ function PlacePicker({ places, place, choose, live }: ReturnType<typeof useCitiz
       <input
         id={inputId}
         type="search"
-        placeholder="Search a place, river or country, e.g. Köln, Danube, Paiporta"
+        placeholder={mode === "past" ? "Search a place of this flood" : "Search a place, river or country, e.g. Köln, Danube, Valencia"}
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
       <div className="location-picker__options" role="group" aria-label="Places">
-        <button
-          type="button"
-          aria-pressed={place === null}
-          className={`location-option${place === null ? " is-selected" : ""}`}
-          onClick={() => choose(null)}
-        >
-          <strong>Anywhere in our watch</strong>
-          <span>{live.sources.length} live places</span>
-        </button>
+        {mode === "live" && (
+          <button
+            type="button"
+            aria-pressed={place === null}
+            className={`location-option${place === null ? " is-selected" : ""}`}
+            onClick={() => choose(null)}
+          >
+            <strong>Anywhere in our watch</strong>
+            <span>{live.sources.length} live places</span>
+          </button>
+        )}
         {list.map((p) => (
           <button
             key={p.id}
@@ -126,15 +137,37 @@ function PlacePicker({ places, place, choose, live }: ReturnType<typeof useCitiz
             className={`location-option${p.id === place?.id ? " is-selected" : ""}`}
             onClick={() => choose(p)}
           >
-            <strong>{placeLabel(p)}</strong>
+            <strong>{mode === "past" ? p.name : placeLabel(p)}</strong>
             <span>
               {countryName(p.country)}
-              {p.source ? ` · ${plainOf(p.source).word}` : " · past flood"}
+              {p.source ? ` · ${plainOf(p.source).word}` : ` · ${p.eventId ? EVENT_META[p.eventId].short : "past flood"}`}
             </span>
           </button>
         ))}
-        {query.trim() && matches.length === 0 && <p className="note">No place matches “{query}”.</p>}
+        {query.trim() && matches.length === 0 && <p className="note">No place matches “{query}”. Try a river, a country or a town.</p>}
       </div>
+      {mode === "live" && !query.trim() && places.length > quick.length && (
+        <details className="disclosure">
+          <summary>All {places.length} places</summary>
+          <div className="location-picker__options" role="group" aria-label="All places">
+            {places.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                aria-pressed={p.id === place?.id}
+                className={`location-option${p.id === place?.id ? " is-selected" : ""}`}
+                onClick={() => choose(p)}
+              >
+                <strong>{placeLabel(p)}</strong>
+                <span>
+                  {countryName(p.country)}
+                  {p.source ? ` · ${plainOf(p.source).word}` : ""}
+                </span>
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
@@ -239,12 +272,13 @@ function ReviewedSteps() {
 
 /** Replay place: the replay day's discharge, as a plain status, labelled a past flood. */
 function replayReading(place: Place, desk: ReturnType<typeof useConsole>): { view: StatusView; m3s: number | null; day: string } {
+  const line = REPLAY_EVENTS.find((e) => e.eventId === place.eventId)?.thresholdM3s ?? 100;
   if (place.eventId === "EMSR517") {
     const row = ahrDischarge().find((r) => r.point_id === place.pointId && r.date === desk.ahrDate);
-    return { view: row ? BAND_VIEW[dischargeBand(row.discharge_m3s)] : NO_READING, m3s: row?.discharge_m3s ?? null, day: desk.ahrDate };
+    return { view: replayStatus(row?.discharge_m3s ?? null, line), m3s: row?.discharge_m3s ?? null, day: desk.ahrDate };
   }
   const row = rowAt(desk.discharge.rows, place.pointId ?? "", desk.date);
-  return { view: row ? BAND_VIEW[dischargeBand(row.discharge_m3s)] : NO_READING, m3s: row?.discharge_m3s ?? null, day: desk.date };
+  return { view: replayStatus(row?.discharge_m3s ?? null, line), m3s: row?.discharge_m3s ?? null, day: desk.date };
 }
 
 const TONE_CARD: Record<StatusView["tone"], string> = {
@@ -259,27 +293,30 @@ const TONE_CARD: Record<StatusView["tone"], string> = {
 /** "Risk right now" for the chosen place, or the whole watch when none is chosen. */
 function RiskCard({ ctx }: { ctx: ReturnType<typeof useCitizenPlace> }) {
   const desk = useConsole();
-  const { place, live, choose } = ctx;
+  const { place, live } = ctx;
   if (!place) {
     const lead = worstFirst(live.sources)[0];
     return (
       <div className="risk-summary">
         <p className="eyebrow">Right now, anywhere in our watch</p>
         {!lead ? (
-          <p className="note" role="status">
-            {live.gauges.state === "loading" || live.euWatch.state === "loading" || live.hazard.state === "loading"
-              ? "Loading live readings…"
-              : "No live readings right now: the live views did not answer. Try again in a few minutes."}
-          </p>
+          live.gauges.state === "loading" || live.euWatch.state === "loading" || live.hazard.state === "loading" ? (
+            <LoadingNote what="live readings" />
+          ) : (
+            <p className="note" role="status">
+              No live readings right now: the live views did not answer. Try Refresh on Now in a few minutes, or switch on Demo data in the header.
+            </p>
+          )
         ) : (
           <>
             <p className="risk-summary__plain">
-              <strong>{headlineText(headlineCounts(live.sources))}.</strong>
+              <strong>{headlineText(headlineCounts(live.sources))}{live.health.failed.length > 0 && !live.health.loading ? ` (of the ${live.sources.length} loaded)` : ""}.</strong>
             </p>
             <PlacesToWatch live={live} limit={3} title="Most notable first" />
           </>
         )}
         <p className="note">Choose a place below for its own reading. Not an official warning.</p>
+        <SlowSourceNote pending={live.gauges.state === "loading" || live.euWatch.state === "loading" || live.hazard.state === "loading"} what="A live source" />
       </div>
     );
   }
@@ -298,15 +335,19 @@ function RiskCard({ ctx }: { ctx: ReturnType<typeof useCitizenPlace> }) {
           <summary>Details</summary>
           <p className="note">
             {r.m3s === null ? "No river-flow reading for this day." : `${formatM3s(r.m3s)} m³/s modelled river flow (GloFAS) on ${formatDay(r.day)}.`}{" "}
-            Status uses FloodSense demo lines, not an official threshold.
+            The line is FloodSense's own alert line for this replay, not an official threshold. Change the day on Replay.
           </p>
         </details>
         <div className="button-row">
           <a className="button" href={routeHref("citizen", "replay")}>
             See what happened
           </a>
-          <button type="button" className="button ghost" onClick={() => choose(null)}>
-            Back to right now
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => desk.openAsk(questionForPlace(place), { place: place.name })}
+          >
+            Ask FloodSense about {place.name}
           </button>
         </div>
       </div>
@@ -333,6 +374,14 @@ function RiskCard({ ctx }: { ctx: ReturnType<typeof useCitizenPlace> }) {
         <summary>Details</summary>
         <p className="note">{s.value}</p>
       </details>
+      <div className="button-row">
+        <button type="button" className="button" onClick={() => desk.openAsk(next48hQuestion(s.name), { place: s.name })}>
+          Is the next 48 h safe here?
+        </button>
+        <button type="button" className="button ghost" onClick={() => desk.openAsk(questionForPlace(place), { place: place.name })}>
+          Ask FloodSense about {s.name}
+        </button>
+      </div>
     </div>
   );
 }
@@ -341,13 +390,33 @@ function RiskCard({ ctx }: { ctx: ReturnType<typeof useCitizenPlace> }) {
 function PastFloods() {
   const desk = useConsole();
   const claims = desk.answer.claims.slice(0, WHY_CLAIMS);
+  if (desk.mode === "past" && desk.eventId !== "EMSR773") return null;
+  if (desk.mode === "live")
+    return (
+      <section className="card" aria-label="Learn from past floods">
+        <header className="card__header">
+          <h2 className="card__title">Learn from past floods</h2>
+        </header>
+        <div className="card__body">
+          <p>Switch the whole console to a past flood to see how the Ahr (July 2021) or Valencia (October 2024) flood unfolded.</p>
+          <div className="button-row">
+            <button type="button" className="button" onClick={() => desk.setEventId("EMSR517")}>
+              Show Ahr 2021
+            </button>
+            <button type="button" className="button" onClick={() => desk.setEventId("EMSR773")}>
+              Show Valencia 2024
+            </button>
+          </div>
+        </div>
+      </section>
+    );
   return (
     <section className="card" aria-label="Learn from past floods">
       <header className="card__header">
         <h2 className="card__title">Learn from past floods</h2>
       </header>
       <div className="card__body">
-        <p>See how the Ahr flood (July 2021) and the Valencia flood (October 2024) unfolded, moment by moment.</p>
+        <p>See how the Valencia flood (October 2024) unfolded, moment by moment.</p>
         <div className="button-row">
           <a className="button" href={routeHref("citizen", "replay")}>
             Open Replay
@@ -374,21 +443,24 @@ export function CitizenOverview() {
   const desk = useConsole();
   const ctx = useCitizenPlace();
   const { place } = ctx;
+  const past = desk.mode === "past";
   return (
     <div className="view">
       <div className="view__intro">
         <div>
-          <h2 className="view__title">Is my area at risk right now?</h2>
+          <h2 className="view__title">{past ? `How did ${EVENT_META[desk.eventId].short} look at my place?` : "Is my area at risk right now?"}</h2>
           <p className="muted">
-            Live river readings across Europe in plain words, with a source behind each one. Click a number to see where it
-            comes from.
+            {past
+              ? "A replay of a past flood in plain words. Pick a place to see its status on the replay day. Not today's situation."
+              : "Live river readings across Europe in plain words, with a source behind each one. Click a number to see where it comes from."}
           </p>
         </div>
       </div>
+      <LiveHealthNote live={ctx.live} />
       <div className="grid grid--citizen">
         <section className="card span-2" aria-label="Risk right now">
           <header className="card__header">
-            <h2 className="card__title">Risk right now{place ? ` · ${place.name}` : ""}</h2>
+            <h2 className="card__title">{past ? "Status in the replay" : "Risk right now"}{place ? ` · ${place.name}` : ""}</h2>
           </header>
           <div className="card__body">
             <RiskCard ctx={ctx} />
@@ -400,9 +472,18 @@ export function CitizenOverview() {
               <a className="button ghost" href={routeHref("citizen", "area")}>
                 See my area
               </a>
+              {!past && (
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => desk.openAsk(next48hQuestion(place?.name), place ? { place: place.name } : undefined)}
+                >
+                  Is the next 48 h safe {place ? "here" : "anywhere"}?
+                </button>
+              )}
               <button
                 type="button"
-                className="button"
+                className="button ghost"
                 onClick={() => (place ? desk.openAsk(questionForPlace(place), { place: place.name }) : desk.openAsk())}
               >
                 Ask FloodSense{place ? ` about ${place.name}` : ""}
@@ -482,26 +563,37 @@ function ValenciaArea() {
   );
 }
 
-/** My area follows the chosen place: a live place, a replay place (Valencia or Ahr), or the whole watch. */
+/** My area follows the chosen place: a live place, a place of the chosen past flood, or (Live, none chosen) the whole watch. */
 export function CitizenArea() {
   const ctx = useCitizenPlace();
   const { place, live } = ctx;
-  if (place?.eventId === "EMSR773") return <ValenciaArea />;
+  if (place?.eventId === "EMSR773")
+    return (
+      <div className="page-stack">
+        <PlacePicker {...ctx} />
+        <ValenciaArea />
+      </div>
+    );
   if (place?.eventId === "EMSR517") {
     return (
-      <div className="citizen-grid">
-        <MapPanel exposureDefault={false} fixedEvent="EMSR517" />
-        <section className="card" aria-label="My area">
-          <p className="section-label">My area · past flood (replay)</p>
-          <h2>{place.name}</h2>
-          <RiskCard ctx={ctx} />
-        </section>
+      <div className="page-stack">
+        <PlacePicker {...ctx} />
+        <div className="citizen-grid">
+          <MapPanel exposureDefault={false} fixedEvent="EMSR517" />
+          <section className="card" aria-label="My area">
+            <p className="section-label">My area · past flood (replay)</p>
+            <h2>{place.name}</h2>
+            <RiskCard ctx={ctx} />
+          </section>
+        </div>
       </div>
     );
   }
   const same = place?.source ? live.sources.filter((s) => s.id !== place.id && s.river && s.river === place.river) : [];
+  const loading = live.sources.length === 0 && (live.gauges.state === "loading" || live.euWatch.state === "loading" || live.hazard.state === "loading");
   return (
     <div className="page-stack">
+      <LiveHealthNote live={live} />
       <PlacePicker {...ctx} />
       <section className="card" aria-label="My area">
         <header className="card__header">
@@ -510,6 +602,16 @@ export function CitizenArea() {
         <div className="card__body">
           <RiskCard ctx={ctx} />
           {place?.source && <EuWatchMap sources={[place.source, ...same]} />}
+          {!place && !loading && live.sources.length > 0 && (
+            <>
+              <p className="note">Every place in our watch ({live.sources.length}). Click a marker to ask FloodSense about it, or search above to pick your place.</p>
+              <EuWatchMap sources={live.sources} />
+              <details className="disclosure">
+                <summary>How we colour the map</summary>
+                <EuWatchLegend />
+              </details>
+            </>
+          )}
           {same.length > 0 && (
             <>
               <h3 className="section-title">Also on the {place?.river}</h3>
@@ -532,9 +634,11 @@ export function CitizenArea() {
  */
 export function CitizenActions() {
   const desk = useConsole();
-  const { place } = useCitizenPlace();
+  const ctx = useCitizenPlace();
+  const { place } = ctx;
   return (
     <div className="page-stack">
+      <PlacePicker {...ctx} />
       <section className="card" aria-label="What to do">
         <header className="card__header">
           <h2 className="card__title">What should I do{place ? ` near ${place.name}` : ""}?</h2>
@@ -544,10 +648,17 @@ export function CitizenActions() {
             Follow official warnings first.{" "}
             {place
               ? `Links below are for ${countryName(place.country)}.`
-              : "Choose a place on Overview to see the warning services for its country."}{" "}
-            {place?.kind === "replay" ? "This place is a replay of a past flood, not a warning." : "FloodSense is not a warning service."}
+              : "Choose a place above to see the warning services for its country."}{" "}
+            {place?.kind === "replay" ? "This place is part of a replayed past flood, not a warning." : "FloodSense is not a warning service."}
           </p>
           <ActionCards place={place} />
+          {place?.source && (
+            <div className="button-row">
+              <button type="button" className="button ghost" onClick={() => desk.openAsk(next48hQuestion(place.name), { place: place.name })}>
+                Is the next 48 h safe at {place.name}?
+              </button>
+            </div>
+          )}
           <p className="note">
             {showsReviewedAnswer(place) ? `Review status of the Valencia 2024 step: ${desk.approval.status}. ` : ""}
             <a href={routeHref("citizen", "evidence")}>See the evidence</a>.
@@ -609,44 +720,72 @@ function LiveViewsEvidence({ live, place }: { live: LiveWatch; place: Place | nu
 export function CitizenEvidence() {
   const desk = useConsole();
   const ctx = useCitizenPlace();
+  const past = desk.mode === "past";
+  const valencia = past && desk.eventId === "EMSR773";
   const point = pointById(desk.points, desk.pointId);
   const row = rowAt(desk.discharge.rows, desk.pointId, desk.date);
   const provenance = row ? provenanceForSource(row.source, desk.provenance.rows) : undefined;
 
   return (
     <div className="page-stack">
-      <section className="card" aria-label="Live sources">
-        <p className="section-label">Live sources</p>
-        <h2>{ctx.place ? `Behind ${ctx.place.name}` : "Behind right now"}</h2>
-        <p className="muted">The live views FloodSense reads through Zetaris, with their query ids and fetch times.</p>
-        <LiveViewsEvidence live={ctx.live} place={ctx.place} />
-      </section>
-      <section className="card" aria-label="Why this source">
-        <p className="section-label">Past event · Valencia 2024 (replay)</p>
-        <h2>
-          {point ? point.name : desk.pointId} on {formatDay(desk.date)}
-        </h2>
-        <p>
-          {row
-            ? `${formatM3s(row.discharge_m3s)} m³/s. ${provenance ? `${provenance.publisher}, ${provenance.licence}.` : ""} ${glofasDischargeNote(row.source) ?? ""}`
-            : "No discharge row is selected."}
-        </p>
-        <details className="disclosure">
-          <summary>Technical detail</summary>
-          {row && <p className="note">{sourceExplanation(row.source, desk.discharge.origin)}</p>}
-          {provenance ? <ProvenanceList row={provenance} /> : <p className="note">No provenance row matched this source.</p>}
-        </details>
-        <div className="button-row">
-          <button type="button" className="button" onClick={() => desk.openEvidence("discharge")}>
-            Open full evidence
-          </button>
-        </div>
-      </section>
-      <section className="card" aria-label="Citations">
-        <p className="section-label">Citations</p>
-        <h2>Sources behind the reviewed answer</h2>
-        <CitationList answer={desk.answer} />
-      </section>
+      <PlacePicker {...ctx} />
+      {!past && (
+        <section className="card" aria-label="Live sources">
+          <p className="section-label">Live sources</p>
+          <h2>{ctx.place ? `Behind ${ctx.place.name}` : "Behind right now"}</h2>
+          <p className="muted">The live views FloodSense reads through Zetaris, with their query ids and fetch times.</p>
+          {ctx.live.sources.length === 0 && (ctx.live.gauges.state === "loading" || ctx.live.euWatch.state === "loading") ? (
+            <LoadingNote what="live sources" />
+          ) : (
+            <LiveViewsEvidence live={ctx.live} place={ctx.place} />
+          )}
+        </section>
+      )}
+      {past && !valencia && (
+        <section className="card" aria-label="Why this source">
+          <p className="section-label">Past flood: {EVENT_META[desk.eventId].short} (replay)</p>
+          <h2>{ctx.place ? `Behind ${ctx.place.name}` : "Behind the replay"}</h2>
+          <p>
+            The Ahr 2021 points AHR01 to AHR04 are modelled GloFAS discharge and hourly rain from the floodsense_seed views when the API serves them, else a
+            bundled copy of the same rows (Open-Meteo, CC BY 4.0). The replay is not live and not an official record of the flood.
+          </p>
+          <div className="button-row">
+            <a className="button" href={routeHref("citizen", "replay")}>
+              Open the replay
+            </a>
+          </div>
+        </section>
+      )}
+      {valencia && (
+        <>
+          <section className="card" aria-label="Why this source">
+            <p className="section-label">Past flood: Valencia 2024 (replay)</p>
+            <h2>
+              {point ? point.name : desk.pointId} on {formatDay(desk.date)}
+            </h2>
+            <p>
+              {row
+                ? `${formatM3s(row.discharge_m3s)} m³/s. ${provenance ? `${provenance.publisher}, ${provenance.licence}.` : ""} ${glofasDischargeNote(row.source) ?? ""}`
+                : "No discharge row is selected."}
+            </p>
+            <details className="disclosure">
+              <summary>Technical detail</summary>
+              {row && <p className="note">{sourceExplanation(row.source, desk.discharge.origin)}</p>}
+              {provenance ? <ProvenanceList row={provenance} /> : <p className="note">No provenance row matched this source.</p>}
+            </details>
+            <div className="button-row">
+              <button type="button" className="button" onClick={() => desk.openEvidence("discharge")}>
+                Open full evidence
+              </button>
+            </div>
+          </section>
+          <section className="card" aria-label="Citations">
+            <p className="section-label">Citations</p>
+            <h2>Sources behind the reviewed answer</h2>
+            <CitationList answer={desk.answer} />
+          </section>
+        </>
+      )}
     </div>
   );
 }

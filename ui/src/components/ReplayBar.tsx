@@ -1,22 +1,24 @@
-import { ServingLine } from "./Banners";
+import { useEffect, useState } from "react";
 import { useConsole } from "../context/ConsoleContext";
-import { replayBarView } from "../lib/events";
-import { replayEventOfPlace } from "../lib/places";
+import { modeStripText } from "../lib/mode";
+import { DemoChip } from "./ModeSwitch";
 
 /**
- * Context strip under the header. "Live data" on Now, a plain "Viewing: ... (replay of a past event)"
- * on pages that show a replayed event, nothing elsewhere. While the simulation plays, Stop stays
- * reachable on every page. On Approvals and Review the answer serving line rides in the same strip.
+ * Context strip under the header, on every page: the global mode in one sentence, "Live data · checked HH:MM" or
+ * "Past flood: Ahr 2021 (replay)", the DEMO DATA chip when demo data is on, and Stop while a simulation plays.
+ * A cached answer is labelled on the answer itself, never in this strip.
  */
 export function ReplayBar() {
-  const { date, playing, stopSimulation, route, page, deskRoute, eventId, ahrDate, placeId } = useConsole();
-  const showServing = route === "insurer" && (page === "approvals" || page === "review");
-  const view = replayBarView(deskRoute, eventId, { date }, { date: ahrDate }, replayEventOfPlace(placeId));
-  if (view.kind === "none" && !playing && !showServing) return null;
-
+  const { modeState, liveCheckedAt, liveHealth, deskRoute, playing, stopSimulation } = useConsole();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
   return (
-    <div className="replay-bar" data-kind={view.kind}>
-      {view.kind !== "none" && <span className="context-text">{view.text}</span>}
+    <div className="replay-bar" data-kind={modeState.mode === "past" && deskRoute.role !== "operator" ? "replay" : "live"} role="status" aria-live="polite">
+      <span className="context-text">{modeStripText(deskRoute.role === "operator" ? { ...modeState, mode: "live" } : modeState, liveCheckedAt, liveHealth, deskRoute.page, now)}</span>
+      <DemoChip />
       {playing && (
         <>
           <span className="replay-state" data-playing="true">
@@ -27,7 +29,6 @@ export function ReplayBar() {
           </button>
         </>
       )}
-      {showServing && <ServingLine inline />}
     </div>
   );
 }

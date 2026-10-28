@@ -163,7 +163,7 @@ class Nodes(unittest.TestCase):
             )
 
 
-@mock.patch.dict("os.environ", {"FF_QUICK_LANE": "false"})  # full-lane test
+@mock.patch.dict("os.environ", {"FF_QUICK_LANE": "false", "FF_FORECAST_LANE": "false"})  # full-lane test
 @mock.patch.object(settings, "live_data", True)
 class FullRun(unittest.TestCase):
     def _run(self, z, question=QUESTION, **kw):
@@ -202,7 +202,7 @@ class FullRun(unittest.TestCase):
         self.assertNotIn("floodsense.hazard_now", views)
 
 
-@mock.patch.dict("os.environ", {"FF_QUICK_LANE": "false"})  # full-lane test
+@mock.patch.dict("os.environ", {"FF_QUICK_LANE": "false", "FF_FORECAST_LANE": "false"})  # full-lane test
 @mock.patch.object(settings, "live_data", True)
 class ReviewFixes(unittest.TestCase):
     def test_classifier_sends_the_past_to_event(self) -> None:

@@ -320,7 +320,6 @@
  "judge_summary": {
   "overall": 0.9,
   "n_claims": 6,
-  "hallucination_rate": 0.1667,
   "citation_coverage": 1.0,
   "numeric_accuracy": 1.0,
   "passes": false,
@@ -525,7 +524,7 @@
    "model_id": "deterministic,nvidia/nemotron-3.5-lightning-30b-a3b",
    "latency_ms": 115773,
    "tokens": null,
-   "summary": "FLAG overall=0.87 hallucination=17% coverage=100% numbers=100% flagged=['C-doc']",
+   "summary": "FLAG overall=0.87 coverage=100% numbers=100% flagged=['C-doc']",
    "evidence_ids": []
   },
   {
@@ -547,7 +546,7 @@
    "model_id": "deterministic,nvidia/nemotron-3.5-lightning-30b-a3b",
    "latency_ms": 80257,
    "tokens": null,
-   "summary": "FLAG overall=0.90 hallucination=17% coverage=100% numbers=100% flagged=['C-doc']",
+   "summary": "FLAG overall=0.90 coverage=100% numbers=100% flagged=['C-doc']",
    "evidence_ids": []
   }
  ],

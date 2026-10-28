@@ -30,7 +30,11 @@ from floodsense_contracts.models import (  # noqa: E402
     MemoryUsed,
     ModelId,
     PlaybookAction,
+    Plain,
     ReplyResponse,
+    WatchEvent,
+    WatchSource,
+    WatchStatus,
 )
 
 SCHEMA = json.loads((CONTRACTS / "schemas" / "floodsense.schema.json").read_text(encoding="utf-8"))
@@ -47,8 +51,12 @@ MODELS = {
     "playbook_action": PlaybookAction,
     "approval": Approval,
     "memory_used": MemoryUsed,
+    "plain": Plain,
     "answer_fields": Answer,
     "reply_response": ReplyResponse,
+    "watch_source": WatchSource,
+    "watch_event": WatchEvent,
+    "watch_status": WatchStatus,
 }
 
 EXAMPLES = {
@@ -60,6 +68,8 @@ EXAMPLES = {
     "approval": ("approval.json", Approval),
     "answer": ("answer_live.json", Answer),
     "reply_response": ("reply.json", ReplyResponse),
+    "watch_event": ("watch_event.json", WatchEvent),
+    "plain": ("plain.json", Plain),
 }
 
 
@@ -291,6 +301,21 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(
             Citation.model_validate(section_and_page).locator.page, 1
         )
+
+    def test_watch_event_rejects_bad_payloads(self) -> None:
+        event = example("watch_event.json")
+        for bad in (
+            {**event, "kind": "alarm"},  # not a feed kind
+            {**event, "agent": "Model"},  # not a rule-based agent
+            {**event, "tone": "red"},  # never red
+            {**event, "id": "42"},  # the id is w + 8 digits
+            {**event, "text": ""},
+            {**{k: v for k, v in event.items() if k != "source"}},
+            {**event, "extra": 1},
+        ):
+            assert_invalid(self, "watch_event", bad)
+            with self.assertRaises(PydanticError):
+                WatchEvent.model_validate(bad)
 
     def test_run_response_is_answer_or_reply(self) -> None:
         validator_for("run_response").validate(example("answer_live.json"))

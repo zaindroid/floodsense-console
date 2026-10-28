@@ -1,5 +1,6 @@
 import { apiBaseUrl, apiTimeoutMs } from "./config";
 import { adoptMemoryUsed, adoptPlaybook, type MemoryUsed, type PlaybookItem } from "../lib/hitl";
+import { adoptPlain, type PlainAnswer } from "../lib/calmAnswer";
 
 /** One citation from a recorded run. Layer (c) carries a document passage. */
 export interface ReplayCitation {
@@ -54,7 +55,6 @@ export interface RecordedRun {
   claims: ReplayClaim[];
   judgeOverall: number | null;
   judgePasses: boolean | null;
-  hallucinationRate: number | null;
   flaggedClaimIds: string[];
   trace: ReplayStep[];
   /** live, cache or replay, from the body's own served_from. */
@@ -76,12 +76,16 @@ export interface RecordedRun {
   /** A declined run's scope.elsewhere: the event that does hold the question, when the gate named one. */
   elsewhere?: string | null;
   /** Router lane (contracts Lane): quick = live watcher + one fast call, full = deep run. Null on older runs. */
-  lane?: "quick" | "full" | null;
+  lane?: "quick" | "forecast" | "full" | null;
   /** Why the router chose the lane, including any "escalated: ..." note. */
   routerReason?: string | null;
   /** H-MEM recall for this run (run level; never linked to a claim). */
   memoryUsed?: MemoryUsed[];
   playbook?: PlaybookItem[];
+  /** Quick and forecast lanes: the calm, plain-language answer (see lib/calmAnswer.ts). Absent on other runs. */
+  plain?: PlainAnswer | null;
+  /** The question this run answered (body.request.question), when stated. */
+  question?: string | null;
 }
 
 const str = (value: unknown): string | null => (typeof value === "string" && value.length > 0 ? value : null);
@@ -168,7 +172,6 @@ export function adoptRunBody(run: Record<string, unknown>, runId: string): Recor
     claims,
     judgeOverall: num(judge?.overall),
     judgePasses: typeof judge?.passes === "boolean" ? judge.passes : null,
-    hallucinationRate: num(judge?.hallucination_rate),
     flaggedClaimIds: Array.isArray(judge?.flagged_claim_ids)
       ? judge.flagged_claim_ids.filter((id): id is string => typeof id === "string")
       : [],
@@ -180,7 +183,7 @@ export function adoptRunBody(run: Record<string, unknown>, runId: string): Recor
     mode: modeOf(run.mode),
     eventId: str(run.event_id),
     elsewhere: str(rec(run.scope)?.elsewhere),
-    lane: run.lane === "quick" || run.lane === "full" ? run.lane : null,
+    lane: run.lane === "quick" || run.lane === "forecast" || run.lane === "full" ? run.lane : null,
     routerReason: str(run.router_reason),
     reviseRounds: num(run.revise_rounds) ?? 0,
     repairRounds: num(run.repair_rounds) ?? 0,
@@ -198,6 +201,8 @@ export function adoptRunBody(run: Record<string, unknown>, runId: string): Recor
     provider: str(run.llm_provider) ?? str(run.provider) ?? str(rec(run.request)?.llm_provider),
     memoryUsed: Array.isArray(run.memory_used) ? adoptMemoryUsed(run.memory_used) : undefined,
     playbook: adoptPlaybook(run.playbook),
+    plain: adoptPlain(run.plain),
+    question: str(rec(run.request)?.question),
   };
 }
 

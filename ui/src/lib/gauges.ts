@@ -8,6 +8,8 @@ export interface GaugeLevelRow {
   ts_utc: string;
   level_cm: number;
   source: string;
+  /** PEGELONLINE river kilometre; absent on older rows. */
+  river_km?: number | null;
   lat: number | null;
   lon: number | null;
   trend_cm_h: number | null;
@@ -39,6 +41,8 @@ export interface GaugeSummary {
   origin: DataOrigin;
   lat: number | null;
   lon: number | null;
+  /** PEGELONLINE river kilometre of the station, when the view carries it. */
+  riverKm?: number | null;
 }
 
 /** A row's origin from its source stamp. Anything that names seed, fixture or replay is not live. */
@@ -86,6 +90,7 @@ export function asGaugeRow(value: unknown): GaugeLevelRow | null {
     ts_utc: ts,
     level_cm: level,
     source,
+    river_km: num(row.river_km),
     lat: num(row.lat),
     lon: num(row.lon),
     trend_cm_h: num(row.trend_cm_h),
@@ -198,6 +203,7 @@ export function summariseGauges(rows: readonly GaugeLevelRow[]): GaugeSummary[] 
       origin: gaugeOrigin(last.source),
       lat: pos ? pos[0] : null,
       lon: pos ? pos[1] : null,
+      riverKm: last.river_km ?? null,
     });
   }
   return out.sort((a, b) => a.water.localeCompare(b.water) || a.station.localeCompare(b.station));

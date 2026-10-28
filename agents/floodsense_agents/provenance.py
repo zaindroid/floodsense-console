@@ -25,6 +25,7 @@ DATASETS: dict[str, tuple[str, ...]] = {
     "hazard_now": ("Open-Meteo forecast rain and rolling GloFAS discharge (hazard_now)",),
     "gauge_levels": ("PEGELONLINE Rhine water levels (Bonn, Koeln, Koblenz)",),
     "eu_watch": ("Open-Meteo Flood API (GloFAS discharge)",),
+    "weather_forecast": ("Open-Meteo forecast API (DWD ICON precipitation)",),
     "exposure_join": (
         "Synthetic insurer portfolio",
         "EMSR773 flood extent (observed event layers)",

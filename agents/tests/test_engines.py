@@ -72,6 +72,8 @@ class FakeEngines:
             if not str(body.get("query", "")).strip():
                 return self.bad("query must be a non-empty string")
             return httpx.Response(200, json={"memories": [ELSEWHERE, RECALLED], "trace": {}})
+        if path == "/hmem/memories":
+            return httpx.Response(200, json={"total": 0, "memories": []})
         if path == "/hmem/store":
             claims = body.get("claims")
             if not body.get("run_id") or not body.get("question") or not isinstance(claims, list):
@@ -210,7 +212,7 @@ class ClientTest(unittest.TestCase):
         got = client(fake).recall({"question": "Why Paiporta?", "event_id": "EMSR773"})
         self.assertEqual(got, [RECALLED])
         body = {"query": "Why Paiporta?", "top_n": 50, "threshold": 0.0}
-        self.assertEqual(fake.calls, [("/hmem/recall", body)])
+        self.assertEqual(fake.calls[0], ("/hmem/recall", body))
 
     def test_recall_without_an_event_keeps_the_top_n(self) -> None:
         c = EnginesClient(
@@ -366,7 +368,8 @@ class MemoryTest(FlagCase):
         (stored,) = fake.bodies("/hmem/store")
         self.assertEqual(stored["run_id"], "e1")
         self.assertEqual(stored["approval"], {"status": "approved", "reviewer": "ayush"})
-        self.assertEqual(stored["claims"], out["claims"])
+        self.assertEqual([{k: v for k, v in c.items() if k != "entities"} for c in stored["claims"]], out["claims"])
+        self.assertEqual(stored["event_id"], out["event_id"])
         last = out["trace"][-1]
         self.assertEqual(last["node"], "learn")
         self.assertIn(f"{len(out['claims'])} claim(s) stored in H-MEM", last["summary"])

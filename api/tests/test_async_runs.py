@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import unittest
@@ -10,6 +11,8 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
+
+os.environ.setdefault("VIEWS_CACHE_WARM", "0")
 
 import httpx  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

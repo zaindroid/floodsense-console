@@ -15,7 +15,7 @@ os.environ.setdefault("CHECKPOINTER", "memory")
 import httpx  # noqa: E402
 
 from floodsense_agents.models import Citation, Claim, Evidence  # noqa: E402
-from floodsense_agents.nightshift import NightshiftClient, current_provider, map_ordered  # noqa: E402
+from floodsense_agents.nightshift import NightshiftClient, map_ordered  # noqa: E402
 from floodsense_agents.nodes.judge import evaluate, needs_repair, route_after_judge  # noqa: E402
 from floodsense_agents.settings import settings  # noqa: E402
 from floodsense_agents.state import Deps, NoMemory  # noqa: E402
@@ -173,8 +173,8 @@ class MapOrdered(unittest.TestCase):
             self.assertEqual(map_ordered(slow_first, range(5)), [0, 10, 20, 30, 40])
             self.assertLess(time.time() - t, 0.6)  # serial would be 0.75 s
 
-    def test_runs_concurrently_and_carries_the_provider_context(self) -> None:
-        seen, active, peak = [], [0], [0]
+    def test_runs_concurrently(self) -> None:
+        active, peak = [0], [0]
         lock = threading.Lock()
 
         def f(i: int) -> str:
@@ -184,18 +184,12 @@ class MapOrdered(unittest.TestCase):
             time.sleep(0.05)
             with lock:
                 active[0] -= 1
-            seen.append(current_provider.get())
             return str(i)
 
-        token = current_provider.set("anthropic")
-        try:
-            with Knobs(llm_max_parallel=4):
-                out = map_ordered(f, range(4))
-        finally:
-            current_provider.reset(token)
+        with Knobs(llm_max_parallel=4):
+            out = map_ordered(f, range(4))
         self.assertEqual(out, ["0", "1", "2", "3"])
         self.assertGreater(peak[0], 1)
-        self.assertEqual(seen, ["anthropic"] * 4)
 
     def test_parallel_one_is_serial(self) -> None:
         with Knobs(llm_max_parallel=1):

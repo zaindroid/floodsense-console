@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { NEXT_48H_QUESTION } from "../api/ask";
+import { next48hQuestion } from "../api/ask";
 import { fetchEuWatch, type EuWatchLoad } from "../api/euWatch";
 import { fetchHazardNow, type HazardNowResult } from "../api/now";
 import { useConsole } from "../context/ConsoleContext";
@@ -11,6 +11,10 @@ import { pointById } from "../lib/series";
 import { EuWatchSection } from "./EuWatch";
 import { GaugeList, GaugeMap } from "./GaugeMap";
 import { Sparkline } from "./Sparkline";
+import { LoadingNote, SlowSourceNote } from "./Loading";
+import { DemoChip } from "./ModeSwitch";
+import { DEMO_SNAPSHOT_AT, demoSnapshotText } from "../lib/demo";
+import { dataTime, staleNote, staleViews } from "../lib/staleness";
 
 const REFRESH_MS = 5 * 60_000;
 const MODEL_NOTE = "Modelled (GloFAS via Open-Meteo), not an official warning";
@@ -43,9 +47,10 @@ const TREND_TEXT: Record<Trend, { arrow: string; label: string }> = {
  * Europe live watch: those gauges plus the GloFAS points of eu_watch on one map, each click pre-filling Ask.
  */
 export function InsurerNowPage() {
-  const { points, openAsk } = useConsole();
+  const { points, openAsk, demo, reportChecked } = useConsole();
   const [load, setLoad] = useState<Load>({ state: "loading" });
-  const gauges = useGaugeLevels();
+  const gauges = useGaugeLevels(0, demo);
+  const lastDemo = useRef(demo);
   const gaugeSummaries = useMemo(() => summariseGauges(gauges.rows), [gauges.rows]);
   const [euWatch, setEuWatch] = useState<EuWatchLoad>({ state: "loading", rows: [], detail: "", queryId: null });
   const watchSources = useMemo(() => buildSources(gaugeSummaries, euWatch.rows), [gaugeSummaries, euWatch.rows]);
@@ -53,6 +58,12 @@ export function InsurerNowPage() {
   const controller = useRef<AbortController | null>(null);
 
   const refresh = useCallback(() => {
+    if (lastDemo.current !== demo) {
+      // Live and demo rows are never shown together.
+      lastDemo.current = demo;
+      setLoad({ state: "loading" });
+      setEuWatch({ state: "loading", rows: [], detail: "", queryId: null });
+    }
     controller.current?.abort();
     const ctrl = new AbortController();
     controller.current = ctrl;
@@ -69,7 +80,7 @@ export function InsurerNowPage() {
         if (ctrl.signal.aborted) return;
         setLoad({ state: "error", detail: error instanceof Error ? error.message : "request failed" });
       });
-  }, []);
+  }, [demo]);
 
   useEffect(() => {
     refresh();
@@ -95,6 +106,10 @@ export function InsurerNowPage() {
 
   const summaries = useMemo(() => (load.state === "ready" ? summariseAll(load.data.rows) : []), [load]);
   const stamp = load.state === "ready" ? latestPastStamp(load.data.rows) : null;
+  const fetchedAt = load.state === "ready" ? dataTime(load.data.cache, load.fetchedAt) : null;
+  useEffect(() => {
+    if (fetchedAt !== null) reportChecked(demo ? Date.parse(DEMO_SNAPSHOT_AT) : fetchedAt);
+  }, [fetchedAt, reportChecked, demo]);
 
   return (
     <div className="now-page">
@@ -103,7 +118,8 @@ export function InsurerNowPage() {
           <h2 className="now-title">Right now{stamp ? ` · ${localTime(stamp)}` : ""}</h2>
           {load.state === "ready" && (
             <p className="now-meta" aria-live="polite">
-              <span className="now-live-tag">Live data · Zetaris</span> Updated {relativeTime(load.fetchedAt, clock)}
+              <span className="now-live-tag">{demo ? `Demo snapshot ${demoSnapshotText()}` : "Live data · Zetaris"}</span> {demo && <DemoChip />}{demo ? "" : ` Updated ${relativeTime(dataTime(load.data.cache, load.fetchedAt) ?? load.fetchedAt, clock)}`}
+              {!demo && load.data.cache?.cache === "stale" ? ` · ${staleNote(staleViews([load.data.cache]))}` : ""}
               {load.data.queryId ? ` · Zetaris query ${load.data.queryId.slice(0, 8)}` : ""}
               {load.data.dropped > 0 ? ` · ${load.data.dropped} rows dropped` : ""}
               {load.data.truncated ? " · truncated" : ""}
@@ -111,8 +127,8 @@ export function InsurerNowPage() {
           )}
         </div>
         <div className="button-row">
-          <button type="button" className="now-refresh" onClick={() => openAsk(NEXT_48H_QUESTION)}>
-            Ask about the next 48 hours
+          <button type="button" className="now-refresh" onClick={() => openAsk(next48hQuestion())}>
+            Is the next 48 h safe anywhere?
           </button>
           <button type="button" className="now-refresh" onClick={refresh}>
             Refresh
@@ -127,14 +143,11 @@ export function InsurerNowPage() {
         </div>
         <p className="now-note">{MODEL_NOTE}. Dashed line and “forecast” values are model forecasts.</p>
 
-      {load.state === "loading" && (
-        <p className="now-status" aria-live="polite">
-          Loading live data…
-        </p>
-      )}
+      {load.state === "loading" && <LoadingNote what="Valencia readings" />}
+      <SlowSourceNote pending={euWatch.state === "loading" || gauges.state === "loading"} what="A live source" />
       {load.state === "error" && (
         <div className="now-error" role="alert">
-          <p>Could not load live data.</p>
+          <p>Could not load the Valencia readings. The other regions below may still be shown.</p>
           <p className="now-detail">{load.detail}</p>
           <button type="button" className="now-refresh" onClick={refresh}>
             Retry

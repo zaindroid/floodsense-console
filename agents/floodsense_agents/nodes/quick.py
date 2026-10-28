@@ -47,6 +47,7 @@ from floodsense_agents.live import (
     hours_between,
     live_points,
 )
+from floodsense_agents import plain as plain_mod
 from floodsense_agents.models import Claim, Evidence
 from floodsense_agents.nodes import judge as judge_node
 from floodsense_agents.nodes.investigator import cite
@@ -66,6 +67,8 @@ def route_after_scope(state: FloodState) -> str:
     """scope's router with the quick lane. A decline always ends the run."""
     if not (state.get("scope") or {}).get("in_scope", True):
         return "declined"
+    if state.get("lane") == "forecast":
+        return "forecast_data"
     return "live_watch" if state.get("lane") == QUICK else "watchers"
 
 
@@ -336,6 +339,113 @@ def build_claims(state: FloodState) -> tuple[list[Claim], str]:
     return claims, lead
 
 
+# ------------------------------------------------------------------ plain answer
+
+
+def _gauge_check(ident: str, row: dict | None) -> plain_mod.Check:
+    row = row or {}
+    c = plain_mod.Check(
+        name=plain_mod.nice_name(row.get("station") or ident),
+        river=plain_mod.nice_river(row.get("water")),
+        country="DE",
+        kind="gauge",
+        needs=("level",),
+    )
+    c.week_note = f"We only have the current reading for {c.where}, not a forecast for the week."
+    level = _num(row.get("level_cm"))
+    if level is None:
+        return c
+    age = hours_between(now_utc(), str(row.get("ts_utc") or ""))
+    if age is None or age > GAUGE_STALE_H:  # no readable time stamp counts as stale
+        c.stale = True
+        return c
+    th = gauge_threshold(row)
+    status, above = plain_mod.UNKNOWN, False
+    if th:
+        mhw = th[1]
+        status = (
+            plain_mod.ELEVATED
+            if level >= mhw
+            else plain_mod.WATCH
+            if level >= 0.8 * mhw
+            else plain_mod.NORMAL
+        )
+        above = level >= mhw
+    prev = _num(row.get("prev_cm"))
+    trend = None
+    if prev is not None and row.get("prev_utc") != row.get("ts_utc"):
+        trend = "rising" if level > prev else "falling" if level < prev else "steady"
+    c.signals.append(
+        plain_mod.Signal("level", status, above_mhw=above, level_text=_fmt(level), trend=trend)
+    )
+    return c
+
+
+def _eu_check(ident: str, row: dict | None) -> plain_mod.Check:
+    row = row or {}
+    p = _EU.get(ident)
+    c = plain_mod.Check(
+        name=plain_mod.nice_name(row.get("name") or (p[1] if p else ident)),
+        river=plain_mod.nice_river(row.get("river") or (p[3] if p else None)),
+        country=str(row.get("country") or (p[2] if p else "")) or None,
+        kind="model",
+        needs=("river",),
+        covers_week=True,
+    )
+    band = str(row.get("band") or "")
+    status = {"above": plain_mod.ELEVATED, "near": plain_mod.WATCH, "below": plain_mod.NORMAL}.get(
+        band
+    )
+    if row and (status or _num(row.get("forecast_max_m3s")) is not None):
+        c.signals.append(plain_mod.Signal("river", status or plain_mod.UNKNOWN))
+    return c
+
+
+def _point_check(ident: str, row: dict | None) -> plain_mod.Check:
+    row = row or {}
+    c = plain_mod.Check(
+        name=POINT_NAMES.get(ident, ident),
+        river=None,
+        country="ES" if ident.startswith("VAL") else "DE" if ident.startswith("AHR") else None,
+        kind="model",
+        needs=("river",),
+        week_note=f"We only have the next two days for {POINT_NAMES.get(ident, ident)}, not a full week.",
+    )
+    fmax = _num(row.get("forecast_max_discharge_m3s"))
+    if fmax is not None:
+        crosses = fmax >= DEFINITIONS["anomaly_discharge"].value
+        c.signals.append(
+            plain_mod.Signal(
+                "river", plain_mod.ELEVATED if crosses else plain_mod.NORMAL, valencia=True
+            )
+        )
+    return c
+
+
+_CHECKS = {"gauge": _gauge_check, "eu": _eu_check, "point": _point_check}
+
+
+def plain_for(state: FloodState, claims: list[Claim]) -> dict | None:
+    """The calm `plain` object for the places this run asked, from the rows it read."""
+    found = {
+        (q["kind"], q["id"]): q["query_id"]
+        for q in (state.get("live_findings") or {}).get("quick_places") or []
+    }
+    checks = []
+    for kind, ident in places(state):
+        row = None
+        raw = (state.get("evidence") or {}).get(found.get((kind, ident)) or "")
+        if raw:
+            row = _own_row(kind, ident, Evidence(**raw))
+        checks.append(_CHECKS[kind](ident, row))
+    question = str((state.get("request") or {}).get("question") or "")
+    return plain_mod.build_plain(
+        checks,
+        asked=plain_mod.horizon_of(question),
+        claims=[c.model_dump() for c in claims],
+    )
+
+
 def quick_answer(state: FloodState) -> dict:
     """Template claims and a template lead. No model call."""
     t = time.time()
@@ -347,9 +457,15 @@ def quick_answer(state: FloodState) -> dict:
                 state, "quick_answer", "no reading in the live rows", lane="none", started=t
             ),
         }
+    try:
+        calm = plain_for(state, claims)
+    except Exception:  # noqa: BLE001 - the plain object is an addition; the claims still answer
+        log.exception("quick: plain answer failed")
+        calm = None
     return {
         "claims": [c.model_dump() for c in claims],
         "summary": f"{lead}. " + " ".join(c.text for c in claims),
+        **({"plain": calm} if calm else {}),
         "trace": trace(
             state,
             "quick_answer",
@@ -386,7 +502,7 @@ def quick_judge(state: FloodState) -> dict:
             state,
             "judge",
             f"{'PASS' if ok else 'FLAG'} overall={rep.overall:.2f} "
-            f"hallucination={rep.hallucination_rate:.0%} coverage={rep.citation_coverage:.0%} "
+            f"coverage={rep.citation_coverage:.0%} "
             f"numbers={rep.numeric_accuracy:.0%} flagged={flagged or '-'}",
             lane="none",
             model_id=rep.model_id,
@@ -415,6 +531,8 @@ def escalate(state: FloodState) -> dict:
         "judge": [],
         "judge_summary": {},
         "summary": "",
+        "forecast": {},
+        "plain": {},
         "status": "running",
         "trace": trace(state, "router", f"escalated: {why}; running the full lane", lane="none"),
     }

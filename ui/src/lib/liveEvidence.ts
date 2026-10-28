@@ -109,7 +109,7 @@ export function evidenceForSource(s: WatchSource, meta: ViewMeta): LiveEvidence 
     fetchedAt: fetched(meta),
     licence: "CC BY 4.0 · Weather data by Open-Meteo.com (Copernicus GloFAS)",
     link: GLOFAS_LINK,
-    notes: ["Status uses FloodSense demo lines (20 and 80 m³/s), not an official threshold.", NOT_OFFICIAL],
+    notes: ["Status compares the point with its own past three days (2x and 4x its median), not an official threshold.", NOT_OFFICIAL],
     freshness,
     memories: [],
   };

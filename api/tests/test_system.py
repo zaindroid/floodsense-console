@@ -30,7 +30,6 @@ from test_redis_cache import StubRedis  # noqa: E402
 CONFIG = {
     "flags": {"FF_HMEM": True, "FF_RAG_DOCS": True},
     "lanes": {"fast": "meterless/fast", "deep": "meterless/deep"},
-    "llm_providers": ["nightshift"],
     "engines_url": "http://engines:8300",
     "schema": "floodsense",
 }
@@ -126,7 +125,6 @@ class SystemBodyTest(unittest.TestCase):
         self.assertFalse(body["memory"]["latest"][1]["seeded"])
         self.assertEqual(body["world_model"]["run_id"], "r1")
         self.assertEqual(body["world_model"]["by_status"], {"challenged": 1, "supported": 1})
-        self.assertEqual(body["models"]["llm_providers"], ["nightshift"])
         self.assertEqual(body["models"]["latest_model_ids"], RUN["model_ids"])
         self.assertTrue(body["rag"]["enabled"])
         self.assertIsNone(body["rag"]["passages"])
@@ -236,7 +234,8 @@ class SystemRouteTest(unittest.TestCase):
 class DemoSeedTest(unittest.TestCase):
     def test_every_seed_is_labelled_and_cited(self) -> None:
         events = {s["event_id"] for s in demo_seed.SEEDS}
-        self.assertEqual(events, {"EMSR773", "EMSR517"})
+        # LIVE-EU: the river-history seeds, recalled by Europe live watch runs
+        self.assertEqual(events, {"EMSR773", "EMSR517", "LIVE-EU"})
         text = json.dumps(demo_seed.SEEDS)
         for place in ("Paiporta", "Barranc del Poyo", "Altenahr"):
             self.assertIn(place, text)

@@ -39,7 +39,7 @@ function LegendRow({ kind, statuses }: { kind: WatchSource["kind"]; statuses: Ga
 
 /**
  * Legend in three groups, so a gauge band is never read as a model band. Red is used only for a gauge at or
- * above its long-term mean high water; model bands are amber, the Valencia demo line neutral or amber.
+ * above its long-term mean high water; model bands are amber, the Valencia points amber or neutral.
  */
 export function EuWatchLegend() {
   return (
@@ -59,7 +59,7 @@ export function EuWatchLegend() {
       </div>
       <div className="eu-legend__group">
         <span className="eu-legend__title">Squares · Valencia model points (GloFAS)</span>
-        <span className="muted small">Now and next 48 h vs FloodSense demo lines (20 / 80 m³/s). Not official</span>
+        <span className="muted small">Now and next 48 h vs the point's own past three days (2x and 4x its median). Not official</span>
         <LegendRow kind="valencia" statuses={["ok", "near", "over"]} />
       </div>
       <p className="muted small">Dashed or faded marker: not a fresh live reading (stale or seed).</p>

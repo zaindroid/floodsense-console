@@ -4,6 +4,7 @@ import { LiveEvidenceView } from "./LiveSources";
 import { useConsole } from "../context/ConsoleContext";
 import { useDismiss } from "../hooks/useDismiss";
 import { numberedCitations } from "../lib/citations";
+import { drawerFields, type Reference } from "../lib/references";
 import { formatCell, formatDay } from "../lib/format";
 import { glofasDischargeNote, pointById, provenanceForSource, rowAt, sourceExplanation } from "../lib/series";
 import type { Answer, Evidence } from "../types/contract";
@@ -134,10 +135,10 @@ export function EvidenceDrawer() {
   }, [desk.evidenceOpen]);
 
   useEffect(() => {
-    if (!desk.evidenceOpen || desk.liveEvidence) return;
+    if (!desk.evidenceOpen || desk.evidenceSource || desk.liveEvidence) return;
     const target = document.getElementById(desk.evidenceTopic === "rain" ? "why-rain" : "why-discharge");
     target?.scrollIntoView({ block: "start" });
-  }, [desk.evidenceOpen, desk.evidenceTopic, desk.liveEvidence]);
+  }, [desk.evidenceOpen, desk.evidenceTopic, desk.evidenceSource, desk.liveEvidence]);
 
   if (!desk.evidenceOpen) return null;
 
@@ -147,13 +148,17 @@ export function EvidenceDrawer() {
         <div className="drawer-head">
           <div>
             <p className="section-label">Evidence</p>
-            <h2 id="evidence-title">{desk.liveEvidence ? "Where this comes from" : "Why this source"}</h2>
+            <h2 id="evidence-title">{desk.evidenceSource ? `Source [${desk.evidenceSource.n}]` : desk.liveEvidence ? "Where this comes from" : "Why this source"}</h2>
           </div>
           <button ref={closeRef} type="button" className="button" onClick={desk.closeEvidence}>
             Close
           </button>
         </div>
-        {desk.liveEvidence ? (
+        {desk.evidenceSource ? (
+          <div className="drawer-body">
+            <ReferenceDetail source={desk.evidenceSource} />
+          </div>
+        ) : desk.liveEvidence ? (
           <div className="drawer-body">
             <LiveEvidenceView evidence={desk.liveEvidence} />
           </div>
@@ -231,6 +236,33 @@ export function EvidenceDrawer() {
         )}
       </aside>
     </div>
+  );
+}
+
+/** One numbered reference in full: what it is, where it is, the quote, and a real link. */
+export function ReferenceDetail({ source }: { source: Reference }) {
+  return (
+    <section className={`ref-detail ref-detail--${source.kind}`} aria-label={`Source ${source.n}`}>
+      <p className="section-label">{source.heading}</p>
+      <h3>{source.title}</h3>
+      <dl className="kv">
+        {drawerFields(source).map((f) => (
+          <div key={f.label}>
+            <dt>{f.label}</dt>
+            <dd>{f.value}</dd>
+          </div>
+        ))}
+      </dl>
+      {source.quote ? <blockquote className="ref-quote">“{source.quote}”</blockquote> : <p className="note">No text quote for this source.</p>}
+      {source.attribution && <p className="note">{source.attribution}</p>}
+      {source.link ? (
+        <p>
+          <SafeLink href={source.link.href}>{source.link.label} ↗</SafeLink>
+        </p>
+      ) : (
+        <p className="note">No source link was recorded for this citation.</p>
+      )}
+    </section>
   );
 }
 

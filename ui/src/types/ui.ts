@@ -1,4 +1,4 @@
-export type RouteId = "citizen" | "insurer";
+export type RouteId = "citizen" | "insurer" | "operator";
 
 export type EvidenceTopic = "discharge" | "rain";
 

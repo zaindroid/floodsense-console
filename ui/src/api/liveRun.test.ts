@@ -121,7 +121,6 @@ describe("resolveFinalRun", () => {
 describe("provider labels", () => {
   it("derives the provider from the model id", () => {
     expect(providerOf("nvidia/nemotron-3.5-lightning-30b-a3b")).toBe("Nightshift");
-    expect(modelLine("anthropic/claude-haiku-4-5", "fast")).toBe("claude-haiku-4-5 · Anthropic (test switch)");
     expect(modelLine("meterless/fast", "fast")).toBe("meterless/fast");
     expect(modelLine("openai/gpt-x", "fast")).not.toMatch(/Nightshift/);
   });

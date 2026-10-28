@@ -46,6 +46,11 @@ WAREHOUSE = [
         "dataset": "Open-Meteo forecast rain and rolling GloFAS discharge (hazard_now)",
         "source_url": "https://open-meteo.com/en/docs",
     },
+    {
+        # migration 073: inline row of floodsense.provenance
+        "dataset": "Open-Meteo forecast API (DWD ICON precipitation)",
+        "source_url": "https://open-meteo.com/en/docs/dwd-api",
+    },
 ]
 
 

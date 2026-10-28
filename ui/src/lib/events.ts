@@ -89,80 +89,21 @@ export function activeEventSelection(
   return { event_id: eventId, replay_date: valencia.date, point_id: valencia.pointId, place: point?.name };
 }
 
-/** Whether a page shows the selected event, so its Ask `context` may name it. Insurer only; the citizen side routes by question. */
-export function pageShowsEvent(route: DeskRoute, eventId: EventId): boolean {
-  if (route.role !== "insurer") return false;
-  if (route.page === "replay" || route.page === "sites") return true;
-  // Portfolio shows an event only when it has an insured book (EMSR773).
-  return route.page === "portfolio" && eventId === "EMSR773";
-}
-
-/** The event a page shows: the selected one where `pageShowsEvent`, else Valencia (EMSR773). */
-export function shownEventId(route: DeskRoute, eventId: EventId): EventId {
-  return pageShowsEvent(route, eventId) ? eventId : "EMSR773";
-}
-
-/** Pure: the Ask `context` for the page. Event fields only where the page shows that event. */
+/** Pure: the Ask `context` for the page under the global mode. Live sends no event at all; Past names the chosen event, its replay date and point. */
 export function screenContextFor(
   route: DeskRoute,
   eventId: EventId,
   valencia: { date: string; pointId: string; points: readonly { point_id: string; name: string }[] },
   ahrSel: { date: string; pointId: string },
+  mode: "live" | "past" = "live",
 ): AskContext {
-  if (pageShowsEvent(route, eventId)) {
-    return { role: route.role, page: route.page, ...activeEventSelection(eventId, valencia, ahrSel) };
-  }
-  const point = valencia.points.find((p) => p.point_id === valencia.pointId);
-  return { role: route.role, page: route.page, point_id: valencia.pointId, place: point?.name };
+  // Civil protection pages name no event or Valencia point: the place is the one picked on the board.
+  if (route.role === "operator") return { role: route.role, page: route.page };
+  if (mode === "past") return { role: route.role, page: route.page, ...activeEventSelection(eventId, valencia, ahrSel) };
+  return { role: route.role, page: route.page };
 }
 
-/** Pages that show a replayed past event: Replay on both desks and insurer Sites. Citizen pages are live-first. */
-export function pageShowsReplay(route: DeskRoute): boolean {
-  if (route.page === "replay") return true;
-  return route.role === "insurer" && route.page === "sites";
-}
-
-/** Citizen pages that follow the chosen place: "Live data", or the replay strip when the place is a past flood. */
-export const CITIZEN_LIVE_PAGES: readonly string[] = ["overview", "area", "actions", "evidence"];
-export const CITIZEN_LIVE_TEXT = "Live data";
-
-const EVENT_NAME: Record<EventId, string> = { EMSR517: "Ahr", EMSR773: "Valencia" };
-
-export type ContextStrip =
-  | { kind: "live"; text: string }
-  | { kind: "replay"; text: string; eventId: EventId; date: string }
-  | { kind: "none"; text: "" };
-
-function plainDay(day: string): string {
-  const d = new Date(`${day}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return day;
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-}
-
-/**
- * Pure: the context strip under the header. "Live data" on Now; a plain "Viewing: ... (replay of a past event)"
- * on pages that show a replayed event; nothing elsewhere. Replay and Sites follow the selected event (Replay on
- * both desks); citizen Overview and My area always show Valencia 2024.
- */
-export function replayBarView(
-  route: DeskRoute,
-  eventId: EventId,
-  valencia: { date: string },
-  ahrSel: { date: string },
-  /** Citizen live pages: the replay event of the chosen place, or null for a live place (or none chosen). */
-  citizenReplay: EventId | null = null,
-): ContextStrip {
-  if (route.page === "now") return { kind: "live", text: NOW_SUBTITLE };
-  if (route.role === "citizen" && CITIZEN_LIVE_PAGES.includes(route.page)) {
-    if (!citizenReplay) return { kind: "live", text: CITIZEN_LIVE_TEXT };
-  } else if (!pageShowsReplay(route)) return { kind: "none", text: "" };
-  const shown: EventId =
-    route.role === "citizen" && route.page !== "replay" ? (citizenReplay ?? "EMSR773") : route.page === "replay" || route.page === "sites" ? eventId : "EMSR773";
-  const date = shown === "EMSR517" ? ahrSel.date : valencia.date;
-  return {
-    kind: "replay",
-    eventId: shown,
-    date,
-    text: `Viewing: ${EVENT_NAME[shown]} flood · ${plainDay(date)} (replay of a past event)`,
-  };
+/** The event the chat greeting fits: the chosen one in Past, else Valencia (only the live greeting ignores it). */
+export function shownEventId(mode: "live" | "past", eventId: EventId): EventId {
+  return mode === "past" ? eventId : "EMSR773";
 }

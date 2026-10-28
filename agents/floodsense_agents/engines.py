@@ -25,6 +25,8 @@ engines are down.
 from __future__ import annotations
 
 import logging
+import time
+import unicodedata
 from typing import Any, Protocol
 
 import httpx
@@ -40,6 +42,11 @@ ERROR_SNIPPET = 200
 # event. Real embeddings (Nightshift's embed lane) are what make cross-event
 # recall meaningful; HMEM_RECALL_THRESHOLD can rise then.
 RECALL_POOL = 50  # engines TOP_N_MAX
+# The ranker can bury a fresh approved memory under old ones (the token-hash
+# embedder), so recall also reads the newest memories, read-only, cached.
+RECENT_LIMIT = 50
+RECENT_TTL_S = 30.0
+RECENT_MAX = 2  # recent additions per recall, so they cannot crowd out the ranked ones
 
 
 class EnginesError(RuntimeError):
@@ -87,6 +94,7 @@ class EnginesClient:
         self.recall_top_n = recall_top_n
         self.recall_threshold = recall_threshold
         self._http = httpx.Client(base_url=self.base_url, timeout=timeout_s, transport=transport)
+        self._recent: tuple[float, list[dict[str, Any]]] = (float("-inf"), [])
 
     def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
@@ -117,11 +125,48 @@ class EnginesClient:
             return []
         body = {"query": question, "top_n": RECALL_POOL, "threshold": self.recall_threshold}
         memories = list(self._call("POST", "/hmem/recall", body).get("memories") or [])
+        recent = self._recent_naming(question, {m.get("memory_id") for m in memories})
         event_id = request.get("event_id")
         if event_id:
             tag = f"event:{event_id}"
-            memories = [m for m in memories if tag in (m.get("tags") or [])]
-        return memories[: self.recall_top_n]
+            # shortcut: an approved run once stored event None; keep those, the caller's place match decides
+
+            def keep(ms):
+                return [
+                    m
+                    for m in ms
+                    if tag in (m.get("tags") or [])
+                    or not any(str(t).startswith("event:") for t in m.get("tags") or [])
+                ]
+
+            memories, recent = keep(memories), keep(recent)
+        # Recent ones take the last slots; at least one ranked result stays.
+        room = max(self.recall_top_n - 1, 0)
+        recent = recent[:room]
+        return memories[: self.recall_top_n - len(recent)] + recent
+
+    def _recent_naming(self, question: str, seen: set) -> list[dict[str, Any]]:
+        """Newest memories whose text names a place or river of the question, as recall rows."""
+        from floodsense_agents.watch import FORECAST_POINTS
+
+        asked = fold(question)
+        names = {fold(n) for p in FORECAST_POINTS for n in (p[3], p[4]) if n and fold(n) in asked}
+        if not names:
+            return []
+        at, rows = self._recent
+        if time.monotonic() - at > RECENT_TTL_S:
+            try:
+                rows = list(self._call("GET", f"/hmem/memories?limit={RECENT_LIMIT}").get("memories") or [])
+            except EnginesError as e:  # recall still has the ranked results
+                log.warning("memory: recent read failed: %s", short(e))
+                rows = []
+            self._recent = (time.monotonic(), rows)
+        out = [
+            {**m, "relevance": 0.0, "layer": None}
+            for m in rows
+            if m.get("memory_id") not in seen and any(n in fold(str(m.get("content") or "")) for n in names)
+        ]
+        return out[:RECENT_MAX]
 
     def store(
         self,
@@ -192,6 +237,11 @@ def memory_origin(memory: dict[str, Any]) -> tuple[bool, str | None]:
         or f"entity:{SEED_REVIEWER}" in tags
     )
     return seeded, reviewer
+
+
+def fold(text: str) -> str:
+    """Lower-case, accent-free text: "Orléans" matches "Orleans"."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c))
 
 
 def short(err: Exception) -> str:

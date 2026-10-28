@@ -26,7 +26,7 @@ import logging
 import time
 from typing import Any, Callable
 
-from floodsense_agents.engines import memory_origin, short
+from floodsense_agents.engines import fold, memory_origin, short
 from floodsense_agents.settings import settings
 from floodsense_agents.state import Deps, FloodState, NoMemory, trace
 
@@ -108,6 +108,26 @@ def _stored_note(report: Any, status: str) -> str:
     return f"{status} run: {stored} claim(s) stored in H-MEM, {already} already remembered"
 
 
+def _tagged(state: FloodState) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The request with the run's event, and claims carrying place, river and doc entities.
+
+    A live run's request has no event_id (the router picked LIVE-EU), so the
+    memories were stored untagged and never recalled by place.
+    """
+    from floodsense_agents.watch import FORECAST_POINTS
+
+    request = state.get("request") or {}
+    request = {**request, "event_id": request.get("event_id") or state.get("event_id")}
+    asked = fold(str(request.get("question") or ""))
+    claims = []
+    for c in state.get("claims") or []:
+        text = fold(str(c.get("text") or "")) + " " + asked
+        found = [n for p in FORECAST_POINTS if fold(p[3]) in text for n in (p[3], p[4])]
+        docs = [x["doc_id"] for x in c.get("citations") or [] if x.get("doc_id")]
+        claims.append({**c, "entities": list(dict.fromkeys([*found, *docs]))})
+    return request, claims
+
+
 def make_learn(deps: Deps) -> Node:
     def learn(state: FloodState) -> dict:
         if not memory_on(deps):
@@ -119,12 +139,8 @@ def make_learn(deps: Deps) -> Node:
             note = f"nothing stored: approval is {status}; memory keeps a human yes"
         else:
             try:
-                report = deps.memory.store(
-                    state.get("run_id", ""),
-                    state.get("request") or {},
-                    state.get("claims") or [],
-                    approval,
-                )
+                request, claims = _tagged(state)
+                report = deps.memory.store(state.get("run_id", ""), request, claims, approval)
                 note = _stored_note(report, status)
             except Exception as e:  # noqa: BLE001 - the approval stands without memory
                 log.warning("memory: store failed: %s", short(e))

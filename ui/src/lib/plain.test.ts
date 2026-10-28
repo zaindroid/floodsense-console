@@ -21,3 +21,11 @@ describe("plainLanguage", () => {
     expect(plainLanguage("Rain peaked at 16.4 mm.")).toBe("Rain peaked at 16.4 mm.");
   });
 });
+
+import { roundLongNumbers } from "./plain";
+describe("long numbers", () => {
+  it("rounds float noise and leaves dates, ids and short decimals alone", () => {
+    expect(roundLongNumbers("peak 140.89999999999998 m3/s, 72.30000000000001 mm")).toBe("peak 140.9 m3/s, 72.3 mm");
+    expect(roundLongNumbers("on 2021-07-13 00:00:00.0 value 5.6 mm id 1a2b3c4d.5678")).toBe("on 2021-07-13 00:00:00.0 value 5.6 mm id 1a2b3c4d.5678");
+  });
+});

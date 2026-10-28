@@ -42,7 +42,7 @@ export function SideNav({
     }
   };
   const { route, page } = useConsole();
-  const desk = route === "citizen" ? "Citizen" : "Insurer";
+  const desk = route === "citizen" ? "Citizen" : route === "operator" ? "Civil protection" : "Insurer";
   const items = DESK_NAV[route];
 
   return (

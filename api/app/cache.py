@@ -236,7 +236,6 @@ def key_of(request: dict[str, Any], flags: str) -> tuple:
         normalize_utc(request.get("replay_ts")),
         request.get("lang") or DEFAULT_LANG,
         fold(str(request.get("doc_query") or "")),
-        _provider_of(request),
         _context_of(request),
         flags,
         CORPUS_VERSION,
@@ -325,13 +324,6 @@ def annotate_replay(
     return run
 
 
-def _provider_of(source: dict[str, Any]) -> str:
-    """The LLM provider a run used. One provider's answer is never served for another."""
-    return str(
-        source.get("llm_provider") or _request_of(source).get("llm_provider") or "nightshift"
-    ).lower()
-
-
 def _lang_of(source: dict[str, Any]) -> str:
     return str(source.get("lang") or _request_of(source).get("lang") or DEFAULT_LANG)
 
@@ -364,7 +356,7 @@ def _context_of(source: dict[str, Any]) -> tuple:
 
 
 def ask_of(source: dict[str, Any]) -> tuple:
-    """Question, event, customer, clock, language, doc_query and LLM provider, as replay compares them."""
+    """Question, event, customer, clock, language, doc_query, as replay compares them."""
     return (
         mode_of(source),
         fold(question_text(source)),
@@ -373,7 +365,6 @@ def ask_of(source: dict[str, Any]) -> tuple:
         clock_from(source),
         _lang_of(source),
         fold(str(source.get("doc_query") or _request_of(source).get("doc_query") or "")),
-        _provider_of(source),
         _context_of(source),
     )
 
@@ -424,8 +415,11 @@ def approved_by_a_person(run: dict[str, Any]) -> bool:
 
 
 def quick_answered(run: dict[str, Any]) -> bool:
-    """A quick-lane answer: no playbook, no HITL, ends ``answered`` (router.py)."""
-    return run.get("lane") == "quick" and run.get("status") == "answered"
+    """A quick- or forecast-lane answer: no playbook, no HITL, ends ``answered`` (router.py).
+
+    Both read the live views, so both are cached with the live TTL.
+    """
+    return run.get("lane") in ("quick", "forecast") and run.get("status") == "answered"
 
 
 def finished_well(run: dict[str, Any]) -> bool:

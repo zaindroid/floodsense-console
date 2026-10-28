@@ -1,3 +1,4 @@
+import { CITIZEN_PAGES, INSURER_PAGES } from "./route";
 import { describe, expect, it } from "vitest";
 import valencia from "../fixtures/valencia_points.json";
 import type { ValenciaPoint } from "../types/views";
@@ -84,42 +85,34 @@ describe("event map points", () => {
   });
 });
 
-describe("screenContextFor", () => {
+describe("screenContextFor under the global mode", () => {
   const val = { date: "2024-10-29", pointId: "VAL01", points: [{ point_id: "VAL01", name: "Paiporta centre" }] };
   const ahrSel = { date: "2021-07-14", pointId: "AHR04" };
-  const plain = (role: string, page: string) => ({ role, page, point_id: "VAL01", place: "Paiporta centre" });
+  const routes = [...CITIZEN_PAGES.map((page) => ({ role: "citizen" as const, page })), ...INSURER_PAGES.map((page) => ({ role: "insurer" as const, page }))];
 
-  it.each(["now", "approvals", "alerts", "review"] as const)("insurer %s carries no event fields", (page) => {
-    for (const ev of ["EMSR517", "EMSR773"] as const) {
-      expect(screenContextFor({ role: "insurer", page }, ev, val, ahrSel)).toEqual(plain("insurer", page));
+  it("Live sends no event, replay date or Valencia default on any page", () => {
+    for (const route of routes) {
+      for (const ev of ["EMSR517", "EMSR773"] as const) {
+        expect(screenContextFor(route, ev, val, ahrSel, "live")).toEqual({ role: route.role, page: route.page });
+      }
     }
   });
 
-  it.each(["now", "replay", "overview", "area", "actions", "evidence"] as const)("citizen %s carries no event fields", (page) => {
-    expect(screenContextFor({ role: "citizen", page }, "EMSR517", val, ahrSel)).toEqual(plain("citizen", page));
+  it("Past sends the chosen event, its replay date and point on every page", () => {
+    for (const route of routes) {
+      expect(screenContextFor(route, "EMSR517", val, ahrSel, "past")).toEqual({
+        role: route.role,
+        page: route.page,
+        event_id: "EMSR517",
+        replay_date: "2021-07-14",
+        point_id: "AHR04",
+        place: "Dernau",
+      });
+      expect(screenContextFor(route, "EMSR773", val, ahrSel, "past")).toMatchObject({ event_id: "EMSR773", replay_date: "2024-10-29", point_id: "VAL01" });
+    }
   });
 
-  it.each(["replay", "sites"] as const)("insurer %s carries the active event", (page) => {
-    expect(screenContextFor({ role: "insurer", page }, "EMSR517", val, ahrSel)).toEqual({
-      role: "insurer",
-      page,
-      event_id: "EMSR517",
-      replay_date: "2021-07-14",
-      point_id: "AHR04",
-      place: "Dernau",
-    });
-    expect(screenContextFor({ role: "insurer", page }, "EMSR773", val, ahrSel).event_id).toBe("EMSR773");
-  });
-
-  it("portfolio carries the event only when it has a book", () => {
-    expect(screenContextFor({ role: "insurer", page: "portfolio" }, "EMSR517", val, ahrSel)).toEqual(plain("insurer", "portfolio"));
-    expect(screenContextFor({ role: "insurer", page: "portfolio" }, "EMSR773", val, ahrSel)).toEqual({
-      role: "insurer",
-      page: "portfolio",
-      event_id: "EMSR773",
-      replay_date: "2024-10-29",
-      point_id: "VAL01",
-      place: "Paiporta centre",
-    });
+  it("defaults to Live", () => {
+    expect(screenContextFor({ role: "citizen", page: "now" }, "EMSR773", val, ahrSel)).toEqual({ role: "citizen", page: "now" });
   });
 });

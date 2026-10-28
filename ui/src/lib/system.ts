@@ -25,8 +25,19 @@ export interface SystemStatus {
   rateLimit: { perMin: number; maxConcurrent: number; inFlight: number; recent429: number; total429: number };
   engines: { configured: boolean; ok: boolean; error: string | null; wmEvents: number | null };
   world: { runId: string | null; hypotheses: number; byStatus: Record<string, number> };
-  models: { ok: boolean; lanes: Record<string, string>; providers: string[]; modelIds: string[] };
+  models: { ok: boolean; lanes: Record<string, string>; modelIds: string[] };
   rag: { enabled: boolean | null; documents: number | null; passages: number | null };
+  /** GET /system views_cache.views: per view reads and its last upstream error. null when the API does not report it. */
+  viewsCache: Record<string, ViewReads> | null;
+}
+
+export interface ViewReads {
+  hits: number;
+  misses: number;
+  staleServes: number;
+  lastError: { at: string; detail: string } | null;
+  /** Last successful upstream read (ISO); null when none yet. */
+  lastOkAt: string | null;
 }
 
 type Obj = Record<string, unknown>;
@@ -47,6 +58,7 @@ export function parseSystem(body: unknown): SystemStatus | null {
   const wm = obj(b.world_model);
   const models = obj(b.models);
   const rag = obj(b.rag);
+  const viewStats = b.views_cache === undefined ? null : obj(obj(b.views_cache).views);
   const latest = (Array.isArray(mem.latest) ? mem.latest : []).map(obj).map((m) => ({
     id: str(m.id) ?? "",
     runId: str(m.run_id),
@@ -93,7 +105,6 @@ export function parseSystem(body: unknown): SystemStatus | null {
     models: {
       ok: models.ok === true,
       lanes,
-      providers: strs(models.llm_providers),
       modelIds: strs(models.latest_model_ids),
     },
     rag: {
@@ -101,6 +112,24 @@ export function parseSystem(body: unknown): SystemStatus | null {
       documents: num(rag.documents),
       passages: num(rag.passages),
     },
+    viewsCache: viewStats
+      ? Object.fromEntries(
+          Object.entries(viewStats).map(([name, raw]) => {
+            const v = obj(raw);
+            const e = obj(v.last_upstream_error);
+            return [
+              name,
+              {
+                hits: num(v.hits) ?? 0,
+                misses: num(v.misses) ?? 0,
+                staleServes: num(v.stale_serves) ?? 0,
+                lastError: str(e.at) ? { at: str(e.at) as string, detail: str(e.detail) ?? "" } : null,
+                lastOkAt: str(v.last_ok_at),
+              },
+            ];
+          }),
+        )
+      : null,
   };
 }
 
@@ -125,14 +154,6 @@ export function modelName(id: string): string {
     .split("-")
     .map((part) => (/^\d+b$/i.test(part) || /^a\d+b$/i.test(part) ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1)))
     .join(" ");
-}
-
-/** "Nightshift", or "Nightshift + Anthropic (test)" when the test switch is on. */
-export function providersLabel(providers: string[]): string {
-  const names = (providers.length ? providers : ["nightshift"]).map((p) =>
-    p === "nightshift" ? "Nightshift" : p === "anthropic" ? "Anthropic (test)" : p,
-  );
-  return [...new Set(names)].join(" + ");
 }
 
 /**

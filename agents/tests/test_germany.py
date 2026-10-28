@@ -16,6 +16,7 @@ os.environ.setdefault("LLM_MODE", "fake")
 
 from floodsense_agents.events import route_event  # noqa: E402
 from floodsense_agents.graph import build_graph  # noqa: E402
+from floodsense_agents import live  # noqa: E402
 from floodsense_agents.live import OFFICIAL_NOTE  # noqa: E402
 from floodsense_agents.models import RunRequest  # noqa: E402
 from floodsense_agents.nightshift import FakeNightshift  # noqa: E402
@@ -199,6 +200,14 @@ class Context(unittest.TestCase):
 
         ok = RunRequest(question="q", context={"page": "now", "role": "citizen", "station": "KÖLN"})
         self.assertEqual(ok.context.station, "KÖLN")
+        op = RunRequest(
+            question="q", context={"page": "situation", "role": "operator", "place": "Köln"}
+        )
+        self.assertEqual(op.context.role, "operator")
+        self.assertEqual(
+            live.focus({"request": {"context": {"role": "operator"}}})["role"], "operator"
+        )
+        self.assertIsNone(live.focus({"request": {"context": {"role": "admin"}}})["role"])
         for bad in (
             {"evil": "x"},
             {"role": "admin"},

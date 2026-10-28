@@ -148,7 +148,7 @@ def focus(state: dict) -> dict:
 
     point_id: kept only when it is one of the event's warehouse points.
     station: uppercased and quote-escaped, for use as a string literal.
-    role: citizen | insurer | None.
+    role: citizen | insurer | operator | None.
     """
     ctx = (state.get("request") or {}).get("context") or {}
     pid = ctx.get("point_id")
@@ -157,7 +157,7 @@ def focus(state: dict) -> dict:
     return {
         "point_id": pid if pid in live_points(state.get("event") or {}) else None,
         "station": station,
-        "role": ctx.get("role") if ctx.get("role") in ("citizen", "insurer") else None,
+        "role": ctx.get("role") if ctx.get("role") in ("citizen", "insurer", "operator") else None,
         "page": ctx.get("page"),
         "place": ctx.get("place"),
     }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildRunRequest, mapRunResponse, modeForPage, modeLabel } from "./ask";
 
-const base = { question: "Is any Valencia point at risk in the next 48 hours?", provider: "nightshift" as const, allowedProviders: [] };
+const base = { question: "Is any Valencia point at risk in the next 48 hours?" };
 
 describe("Ask mode from the route", () => {
   it("a Now page asks in live mode", () => {

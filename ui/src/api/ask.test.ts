@@ -7,7 +7,7 @@ const runBody = (over: Record<string, unknown> = {}) => ({
   status: "awaiting_approval",
   served_from: "live",
   label: { live: true, kind: "live", text: null },
-  model_ids: ["nvidia/nemotron", "claude-sonnet-x"],
+  model_ids: ["nvidia/nemotron", "other-model-x"],
   summary: "Discharge peaked.",
   claims: [{ claim_id: "C1", text: "Peak 471 m3/s.", citations: [{ citation_id: "a", layer: "a", title: "hazard" }] }],
   trace: [{ seq: 1, node: "scope", summary: "ok" }],
@@ -15,25 +15,18 @@ const runBody = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("buildRunRequest", () => {
-  it("sends the provider only when /config listed it", () => {
-    const base = { question: " Where? ", provider: "anthropic" as const };
-    expect(buildRunRequest({ ...base, allowedProviders: ["nightshift"] })).toEqual({
-      question: "Where?",
-      doc_query: "Where?",
-    });
-    expect(buildRunRequest({ ...base, allowedProviders: ["nightshift", "anthropic"] }).llm_provider).toBe("anthropic");
+  it("builds the question and doc_query, nothing else", () => {
+    expect(buildRunRequest({ question: " Where? " })).toEqual({ question: "Where?", doc_query: "Where?" });
   });
   it("carries thread_id and the event", () => {
     const body = buildRunRequest({
       question: "and Paiporta?",
       eventId: "EMSR517",
-      provider: "nightshift",
-      allowedProviders: ["nightshift"],
       threadId: "t1",
     });
     expect(body.thread_id).toBe("t1");
     expect(body.event_id).toBe("EMSR517");
-    expect(buildRunRequest({ question: "q", provider: "nightshift", allowedProviders: [], threadId: null })).not.toHaveProperty(
+    expect(buildRunRequest({ question: "q", threadId: null })).not.toHaveProperty(
       "thread_id",
     );
   });
@@ -47,7 +40,7 @@ describe("mapRunResponse", () => {
     expect(result.run.servedFrom).toBe("live");
     expect(result.run.threadId).toBe("t1");
     expect(result.run.status).toBe("awaiting_approval");
-    expect(runBadge(result.run)).toBe("Live · claude-sonnet-x");
+    expect(runBadge(result.run)).toBe("Live · other-model-x");
   });
   it("never calls a replay or cache hit live", () => {
     const replay = mapRunResponse(
@@ -69,7 +62,7 @@ describe("mapRunResponse", () => {
     expect(!r.ok && r.message).toContain("30 s");
   });
   it("maps 422 and 5xx", () => {
-    expect(mapRunResponse(422, { detail: "llm_provider anthropic is not enabled" }, null)).toMatchObject({
+    expect(mapRunResponse(422, { detail: "request not accepted" }, null)).toMatchObject({
       ok: false,
       kind: "provider",
     });
@@ -100,10 +93,10 @@ describe("askFloodSense", () => {
   it("posts JSON and reads Retry-After", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ detail: "x" }), { status: 429, headers: { "Retry-After": "12" } }));
     vi.stubGlobal("fetch", fetchMock);
-    const r = await askFloodSense({ question: "q", provider: "nightshift", allowedProviders: ["nightshift"] }, undefined, "http://api");
+    const r = await askFloodSense({ question: "q" }, undefined, "http://api");
     expect(!r.ok && r.message).toContain("12 s");
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://api/runs");
-    expect(JSON.parse(init.body as string)).toMatchObject({ question: "q", llm_provider: "nightshift" });
+    expect(JSON.parse(init.body as string)).toMatchObject({ question: "q" });
   });
 });

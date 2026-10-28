@@ -21,7 +21,7 @@ Layer = Literal["a", "b", "c"]
 Storage = Literal["full_text", "pointer"]
 Grounding = Literal["supported", "partial", "unsupported"]
 ServedFrom = Literal["live", "cache", "replay"]
-Lane = Literal["quick", "full"]  # run lanes; a front-door reply is lane "reply"
+Lane = Literal["quick", "forecast", "full"]  # run lanes; a front-door reply is lane "reply"
 ApprovalStatus = Literal["pending", "approved", "edited", "rejected"]
 ActionType = Literal[
     "notify-policyholders", "dispatch-loss-adjuster", "flag-underwriting-review", "inform-public"
@@ -158,6 +158,39 @@ class MemoryUsed(ContractModel):
     seeded: bool
 
 
+class Forecast(ContractModel):
+    """Forecast lane only: a screening status and a template lead, never official."""
+
+    status: Literal["Normal", "Watch", "Elevated"]
+    status_label: str | None = None
+    status_reason: str | None = None
+    places: list[str] = Field(default_factory=list)
+    horizon_h: int | None = Field(default=None, ge=1)
+    lead: str | None = None
+    screening: str | None = None
+    gaps: list[str] = Field(default_factory=list)
+    disclaimer: str = Field(min_length=1)
+    attribution: str | None = None
+
+
+class Plain(ContractModel):
+    """Quick and forecast lanes: the calm, plain-language answer. Fixed rules, no model."""
+
+    headline: str = Field(min_length=1)
+    one_line: str = Field(min_length=1)
+    horizon: Literal["48h", "7d"]
+    status: Literal["normal", "watch", "elevated", "unknown"]
+    basis: Literal["gauge", "model"] | None = None
+    places: list[str] = Field(default_factory=list)
+    country: str | None = None
+    countries: list[str] = Field(default_factory=list)
+    service: str | None = None
+    context: str | None = None
+    next_step: str = Field(min_length=1)
+    disclaimer: str = Field(min_length=1)
+    details: list[str]
+
+
 class Answer(ContractModel):
     run_id: str
     question: str
@@ -170,6 +203,8 @@ class Answer(ContractModel):
     judge: Judge | None = None
     lane: Lane | None = None
     router_reason: str | None = None
+    forecast: Forecast | None = None
+    plain: Plain | None = None
     memory_used: list[MemoryUsed] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -199,3 +234,57 @@ class ReplyResponse(ContractModel):
 
 # What POST /runs returns.
 RunResponse = Answer | ReplyResponse
+
+
+# ---- Control tower (GET /watch/events, /watch/stream, /watch/status) ----
+
+WatchKind = Literal[
+    "detected", "checked", "exposure", "drafted", "awaiting_approval", "approved", "info"
+]
+WatchAgent = Literal["Watch", "Forecast", "Exposure", "Playbook", "Judge", "Human"]
+WatchTone = Literal["normal", "watch", "elevated", "neutral", "unknown"]
+
+
+class WatchSource(ContractModel):
+    """The contract view and the Zetaris query id behind an event."""
+
+    view: str = Field(min_length=1)
+    query_id: str | None = None
+
+
+class WatchEvent(ContractModel):
+    """One activity-feed row. Fixed-template text; no model writes it."""
+
+    id: str = Field(pattern=r"^w[0-9]{8}$")
+    ts: str = Field(pattern=DATE_TIME)
+    kind: WatchKind
+    agent: WatchAgent
+    place_id: str | None = None
+    place: str
+    river: str
+    country: str
+    status: str
+    tone: WatchTone
+    text: str = Field(min_length=1)
+    run_id: str | None = None
+    source: WatchSource
+    detail: str | None = None
+    data: dict[str, Any]
+
+
+class WatchStatus(ContractModel):
+    """GET /watch/status: loop, last scan, counts and the auto-assess switch with its caps."""
+
+    note: str
+    loop: dict[str, Any]
+    scanning: bool
+    started_at: str = Field(pattern=DATE_TIME)
+    last_cycle: dict[str, Any] | None = None
+    counts: dict[str, Any]
+    latest_event_id: str | None = None
+    awaiting_run_ids: list[str]
+    auto_assess: dict[str, Any]
+    persisted: bool
+    persisted_reason: str | None = None
+    served_from: ServedFrom
+    cached_at: str | None = None

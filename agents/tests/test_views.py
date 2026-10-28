@@ -105,6 +105,14 @@ class ViewsTest(unittest.TestCase):
             self.assertEqual(c.get(f"/views/{name}").status_code, 404, name)
         self.assertEqual(z.sql, [])
 
+    def test_weather_forecast_is_exposed_with_numbers(self) -> None:
+        c = self._client(FakeZetaris())
+        r = c.get("/views/weather_forecast")
+        self.assertEqual(r.status_code, 200)
+        # The fake runs the seed schema: 45 position-only rows, no forecast, all dropped.
+        self.assertEqual(r.json(), [])
+        self.assertEqual(r.headers["x-dropped-rows"], "45")
+
     def test_discharge_daily_is_a_bare_array_past_the_sample_cap(self) -> None:
         c = self._client(FakeZetaris())
         r = c.get("/views/discharge_daily")

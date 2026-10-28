@@ -80,7 +80,7 @@ export function stationName(station: string): string {
   return station.toLowerCase().replace(/(^|[\s(.-])(\p{L})/gu, (_, pre: string, c: string) => pre + c.toUpperCase());
 }
 
-/** gauge: PEGELONLINE vs MHW; model: eu_watch GloFAS band; valencia: hazard_now GloFAS vs the FloodSense demo line. */
+/** gauge: PEGELONLINE vs MHW; model: eu_watch GloFAS band; valencia: hazard_now GloFAS vs the point's own recent flow. */
 export type SourceKind = "gauge" | "model" | "valencia";
 
 /** One marker / list row: a PEGELONLINE gauge or a GloFAS point. */
@@ -100,6 +100,8 @@ export interface WatchSource {
   question: string;
   /** Measured time (gauge), model day (eu_watch) or latest model hour (Valencia). */
   measuredAt: string | null;
+  /** PEGELONLINE river kilometre (gauges only), so the operator desk can order a river's gauges. */
+  riverKm?: number | null;
 }
 
 const STATUS_RANK: Record<GaugeStatus, number> = { over: 0, near: 1, ok: 2, unknown: 3 };
@@ -126,6 +128,7 @@ export function fromGauge(g: GaugeSummary): WatchSource | null {
     live: g.origin === "live" && !g.stale,
     question: questionFor(river, name),
     measuredAt: g.measuredAt,
+    riverKm: g.riverKm ?? null,
   };
 }
 
@@ -154,7 +157,19 @@ export function fromModel(r: EuWatchRow): WatchSource {
   };
 }
 
-/** Valencia model point from hazard_now: the higher of now and the 48 h forecast max, against the demo cuts. */
+/**
+ * Pure: the Valencia cuts for one point, relative to the point's own recent flow so a point whose base flow is high
+ * (about 30 m³/s at most of the eight) is not permanently raised: watch at 2x, over at 4x the median of its past
+ * rows, with the median floored at 5 m³/s so a near-dry point does not trip on noise.
+ */
+export function valenciaCuts(past: readonly { discharge_m3s: number | null }[]): { watch: number; warning: number } {
+  const v = past.map((r) => r.discharge_m3s).filter((x): x is number => x !== null).sort((a, b) => a - b);
+  const median = v.length === 0 ? 0 : v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+  const base = Math.max(median, 5);
+  return { watch: base * 2, warning: base * 4 };
+}
+
+/** Valencia model point from hazard_now: the higher of now and the 48 h forecast max, against its own cuts (`valenciaCuts`). */
 export function fromValencia(
   point: { point_id: string; name: string; lat: number; lon: number },
   now: { latest: { discharge_m3s: number | null; ts_utc: string } | null; forecastMax: { discharge_m3s: number } | null },

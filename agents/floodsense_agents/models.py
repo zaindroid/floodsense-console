@@ -232,12 +232,14 @@ class RunContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     page: str | None = Field(default=None, pattern=r"^[a-z][a-z_-]{0,23}$")
-    role: Literal["citizen", "insurer"] | None = None
+    role: Literal["citizen", "insurer", "operator"] | None = None
     place: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[\w .,'()-]+$")
     point_id: str | None = Field(default=None, pattern=r"^[A-Z]{3}\d{2}$")
     station: str | None = Field(default=None, pattern=r"^[A-Za-zÄÖÜäöüß .-]{2,40}$")
     event_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_]{1,24}$")
     replay_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    # True on a run the control tower started by itself (FF_AUTO_ASSESS). A tag only.
+    auto: bool | None = None
 
 
 class RunRequest(BaseModel):
@@ -257,9 +259,6 @@ class RunRequest(BaseModel):
     # extra: layer (c) document search. The Investigator calls retrieve_docs with
     # it once when FF_RAG_DOCS is on. Null or blank skips retrieval.
     doc_query: str | None = None
-    # Test only: which LLM answers this run. Nightshift unless LLM_PROVIDER_SWITCH
-    # is on and ANTHROPIC_API_KEY is set (local benchmarking; see agents/README.md).
-    llm_provider: str = "nightshift"
     # extra: event replays the event window; live reads hazard_now (past days and
     # the ~48 h forecast). Null lets live.resolve_mode classify the question.
     # replay_ts set always means event.
@@ -267,16 +266,6 @@ class RunRequest(BaseModel):
     # extra: what the user is looking at (page, role, place, point, station).
     # A selected station, point or place wins over the default event.
     context: RunContext | None = None
-
-    @field_validator("llm_provider")
-    @classmethod
-    def _known_provider(cls, v: str | None) -> str:
-        from floodsense_agents.nightshift import available_providers
-
-        v = (v or "nightshift").strip().lower()
-        if v not in available_providers():
-            raise ValueError(f"llm_provider {v!r} is not available on this deployment")
-        return v
 
     @field_validator("replay_ts")
     @classmethod

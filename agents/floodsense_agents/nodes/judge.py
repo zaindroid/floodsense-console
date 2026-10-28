@@ -258,7 +258,6 @@ def make(deps: Deps):
                 state,
                 "judge",
                 f"{'PASS' if rep.passes else 'FLAG'} overall={rep.overall:.2f} "
-                f"hallucination={rep.hallucination_rate:.0%} "
                 f"coverage={rep.citation_coverage:.0%} numbers={rep.numeric_accuracy:.0%} "
                 f"flagged={rep.flagged_claim_ids or '-'}",
                 lane="deep" if deps and rep.model_id != "deterministic" else "none",

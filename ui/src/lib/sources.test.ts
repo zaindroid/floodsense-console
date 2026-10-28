@@ -50,7 +50,7 @@ describe("model chip", () => {
     );
     expect(modelChip(null, "sql")).toBe("SQL · Zetaris");
     expect(modelChip("deterministic", "none")).toBe("rules");
-    expect(modelChip("claude-sonnet-x", "fast")).toBe("claude-sonnet-x");
+    expect(modelChip("other-model-x", "fast")).toBe("other-model-x");
     expect(runModelLine(run.trace.map((s) => s.modelId ?? ""))).toBe("Nemotron 3.5 Lightning 30B via Nightshift");
   });
 });
@@ -90,9 +90,9 @@ describe("upstream links", () => {
 describe("providerOf", () => {
   it("uses the trace's explicit provider first, the id rule only without one", () => {
     expect(providerOf("nvidia/nemotron-3.5-lightning-30b-a3b", "openrouter")).toBe("openrouter");
-    expect(providerOf("anthropic/claude-haiku-4-5", "nightshift")).toBe("Nightshift");
+    expect(providerOf("acme/model-x", "nightshift")).toBe("Nightshift");
     expect(providerOf("nvidia/nemotron-3.5-lightning-30b-a3b")).toBe("Nightshift");
-    expect(providerOf("anthropic/claude-haiku-4-5", null)).toBe("Anthropic (test switch)");
+    expect(providerOf("acme/model-x", null)).toBeNull();
     expect(providerOf("openai/gpt-x", "")).toBeNull();
     expect(modelChip("nvidia/nemotron-3.5-lightning-30b-a3b", "fast", "openrouter")).toBe("Nemotron 3.5 Lightning 30B · openrouter");
   });

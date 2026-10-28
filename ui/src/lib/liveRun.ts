@@ -1,4 +1,4 @@
-import { NODE_LABELS, PIPELINE_ORDER, QUICK_ORDER, statusText, type PipelineNodeId } from "./pipeline";
+import { FORECAST_ORDER, NODE_LABELS, PIPELINE_ORDER, QUICK_ONLY, QUICK_ORDER, statusText, type PipelineNodeId } from "./pipeline";
 
 /**
  * Pure state for a live run streamed from GET /runs/{id}/events.
@@ -38,7 +38,7 @@ export interface LiveRunState {
   seen: number[];
   error: string | null;
   /** Router lane once the router step lands: quick or full; null before. */
-  lane?: "quick" | "full" | null;
+  lane?: "quick" | "forecast" | "full" | null;
   /** "escalated: ..." when the quick lane handed the run to the full lane. */
   escalated?: string | null;
 }
@@ -57,6 +57,10 @@ const NODE_ALIASES: Record<string, PipelineNodeId> = {
   live_watch: "live_watch",
   quick_answer: "quick_answer",
   quick_judge: "judge",
+  forecast_data: "forecast_data",
+  history: "history",
+  forecast_answer: "forecast_answer",
+  forecast_judge: "judge",
   watchers: "watchers",
   memory: "memory",
   recall: "memory",
@@ -74,7 +78,6 @@ export function liveNodeId(node: unknown): PipelineNodeId | null {
   return typeof node === "string" ? NODE_ALIASES[node.toLowerCase()] ?? null : null;
 }
 
-const QUICK_ONLY: readonly PipelineNodeId[] = ["live_watch", "quick_answer"];
 
 function blankNode(id: PipelineNodeId): LiveNode {
   return {
@@ -90,11 +93,18 @@ function blankNode(id: PipelineNodeId): LiveNode {
 }
 
 /** The nodes a lane draws, keeping what has already landed. Quick: no Human review. */
-export function laneNodes(nodes: LiveNode[], lane: "quick" | "full" | null, escalated = false): LiveNode[] {
+export function laneNodes(
+  nodes: LiveNode[],
+  lane: "quick" | "forecast" | "full" | null,
+  escalated = false,
+): LiveNode[] {
+  const ran = new Set(nodes.map((n) => n.id));
   const ids: readonly PipelineNodeId[] =
     lane === "quick"
       ? QUICK_ORDER
-      : PIPELINE_ORDER.filter((id) => escalated || !QUICK_ONLY.includes(id));
+      : lane === "forecast"
+        ? FORECAST_ORDER
+        : PIPELINE_ORDER.filter((id) => !QUICK_ONLY.includes(id) || (escalated && ran.has(id)));
   return ids.map((id) => nodes.find((n) => n.id === id) ?? blankNode(id));
 }
 
@@ -198,7 +208,13 @@ export function liveReducer(state: LiveRunState, event: LiveEvent): LiveRunState
       loops.push(`Escalated to the full investigation: ${summary.replace(/^escalated:\s*/i, "")}`);
       return { ...state, seen, loops, lane: "full", escalated: summary, nodes: laneNodes(routed, "full", true), announce: loops[loops.length - 1] };
     }
-    const lane = /^chose quick/i.test(summary) ? "quick" : /^chose full/i.test(summary) ? "full" : state.lane ?? null;
+    const lane = /^chose quick/i.test(summary)
+      ? "quick"
+      : /^chose forecast/i.test(summary)
+        ? "forecast"
+        : /^chose full/i.test(summary)
+          ? "full"
+          : state.lane ?? null;
     return { ...state, seen, lane, nodes: laneNodes(routed, lane, false), announce: summary ? `Router: ${summary}` : "Router finished." };
   }
   const repair = /^repair round\s*(\d+)?/i.exec(summary);

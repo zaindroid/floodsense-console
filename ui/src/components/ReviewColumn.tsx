@@ -1,5 +1,9 @@
 import { plainLanguage } from "../lib/plain";
-import { useState, type KeyboardEvent } from "react";
+import { useMemo, useState, type KeyboardEvent } from "react";
+import { ServingLine } from "./Banners";
+import { RefList, RefMarks } from "./RefMarks";
+import { answerEventId } from "../lib/sources";
+import { numberAnswerReferences } from "../lib/references";
 import { causalChain, skepticVerdicts } from "../fixtures/console";
 import { useConsole } from "../context/ConsoleContext";
 import { laneLabel } from "../lib/lanes";
@@ -13,6 +17,11 @@ export function ReviewColumn() {
   const [tab, setTab] = useState<"chain" | "skeptic" | "judge">("chain");
   const judge = desk.answer.judge;
   const recordedRows = desk.discharge.origin !== "live";
+  const refs = useMemo(
+    () => numberAnswerReferences(desk.answer, { scope: "review", eventId: answerEventId(desk.answer) }),
+    [desk.answer],
+  );
+  const marks = (claimId: string | undefined) => <RefMarks nums={refs.claims.find((c) => c.id === claimId)?.refs ?? []} refs={refs.refs} />;
   const tabs = [
     ["chain", "Causal chain"],
     ["skeptic", "Skeptic"],
@@ -41,6 +50,8 @@ export function ReviewColumn() {
           <h2>{desk.answer.question}</h2>
         </div>
       </div>
+      <ServingLine inline />
+      
       <p className="note">
         Skeptic notes and Judge scores are fixtures for this screen. They are not a Nightshift call, and they do not
         choose a model lane. The human still decides. Nothing here is sent.
@@ -76,9 +87,7 @@ export function ReviewColumn() {
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="tab-panel">
         {tab === "chain" && (
           <ol className="chain">
-            {desk.discharge.origin === "live" && (
-              <li className="note">The chain quotes the recorded fixture answer. Discharge rows on the map are live.</li>
-            )}
+
             {desk.discharge.origin === "seed" && (
               <li className="note">The chain quotes the seed extract on this desk.</li>
             )}
@@ -90,7 +99,9 @@ export function ReviewColumn() {
                 <li key={link.id} className="step">
                   <p className="step-label">{link.label}</p>
                   <h3>{link.title}</h3>
-                  <p title={claim?.text}>{plainLanguage(claim?.text ?? "")}</p>
+                  <p title={claim?.text}>
+                    {plainLanguage(claim?.text ?? "")} {marks(link.claim_id)}
+                  </p>
                   <p className="note">{link.note}</p>
                   <div className="badge-row">
                     {verdict && <OutcomeBadge outcome={verdict.outcome} />}
@@ -113,7 +124,9 @@ export function ReviewColumn() {
               return (
                 <li key={verdict.claim_id} className="step">
                   <OutcomeBadge outcome={verdict.outcome} />
-                  <h3 title={claim?.text}>{plainLanguage(claim?.text ?? "")}</h3>
+                  <h3 title={claim?.text}>
+                    {plainLanguage(claim?.text ?? "")} {marks(verdict.claim_id)}
+                  </h3>
                   <p>{verdict.counter_check}</p>
                 </li>
               );
@@ -145,7 +158,9 @@ export function ReviewColumn() {
                       {claim.citation_faithful ? "citation_faithful" : "citation not faithful"}
                     </span>
                   </div>
-                  <h3>{text}</h3>
+                  <h3>
+                    {text} {marks(claim.claim_id)}
+                  </h3>
                   <p>{claim.rationale}</p>
                   <p className="note">{laneLabel(claim.model_id)}</p>
                 </article>
@@ -155,6 +170,7 @@ export function ReviewColumn() {
         )}
         {tab === "judge" && !judge && <p className="note">This answer has no judge block.</p>}
       </div>
+      <RefList refs={refs.refs} label="References in this answer" />
     </section>
   );
 }

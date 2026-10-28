@@ -10,8 +10,11 @@ import {
   cardStatus,
   decisionStatusLine,
   memoryLine,
+  seededMemoryNote,
+  DEATH_TOLL_NOTE,
   NO_MEMORIES,
   sitesLine,
+  draftLabel,
   sourceChips,
   actionChip,
   reviewEvidence,
@@ -87,9 +90,13 @@ describe("approval card logic", () => {
     expect(items[1].actionType).toBeNull();
     expect(actionChip(items[0].actionType)).toBe("Notify policyholders");
     expect(actionChip("inform-public")).toBe("Inform public");
-    expect(sitesLine(3)).toBe("3 sites affected");
-    expect(sitesLine(1)).toBe("1 site affected");
-    expect(sitesLine(null)).toBe("sites not counted");
+    expect(sitesLine(3)).toBe("3 insured sites in the affected area");
+    expect(sitesLine(1)).toBe("1 insured site in the affected area");
+    expect(sitesLine(null)).toBe("Site count not reported by the Exposure step");
+    expect(sitesLine(0, "EMSR773")).toBe("0 insured sites in the affected area");
+    expect(sitesLine(0, "LIVE-EU")).toBe("0 insured sites · the demo book covers Valencia only");
+    expect(draftLabel(true)).toBe("Draft message (sent only after approval)");
+    expect(draftLabel(false)).toBe("Internal note — nothing is sent");
   });
   it("builds approve and edit bodies, refusing what would be a 422", () => {
     expect(buildApprovalBody("approve", " ok ", {}, items)).toEqual({ ok: true, body: { action: "approve", reviewer: "insurer-desk", reviewer_note: "ok" } });
@@ -153,5 +160,19 @@ describe("approval card logic", () => {
     const q = queueFromApproval("r1", { summary: "S", playbook: PB, judge_summary: { overall: 0.82, passes: true }, status: "awaiting_approval" });
     expect(q).toMatchObject({ runId: "r1", judgeScore: 0.82, judgePasses: true, status: "pending" });
     expect(q.items).toHaveLength(2);
+  });
+});
+
+describe("seededMemoryNote", () => {
+  it("flags a seeded memory that states a death toll, and nothing else", () => {
+    expect(seededMemoryNote({ seeded: true, text: "In 2021 about 241 people died along the Ahr." })).toBe(DEATH_TOLL_NOTE);
+    expect(seededMemoryNote({ seeded: true, text: "62 people were killed" })).toBe(DEATH_TOLL_NOTE);
+    expect(seededMemoryNote({ seeded: true, text: "Deaths were reported" })).toBe(DEATH_TOLL_NOTE);
+    for (const w of ["lives lost", "fatalities", "fatality", "victims", "casualties", "casualty", "dead", "killing"]) {
+      expect(seededMemoryNote({ seeded: true, text: `Reports of ${w} in the flood` })).toBe(DEATH_TOLL_NOTE);
+    }
+    expect(seededMemoryNote({ seeded: true, text: "Altenahr 249.61 m3/s" })).toBeNull();
+    expect(seededMemoryNote({ seeded: false, text: "62 people died" })).toBeNull();
+    expect(DEATH_TOLL_NOTE).toBe("[source text, verify before quoting]");
   });
 });

@@ -19,6 +19,11 @@ GET  /runs/{id}/verify             every agent step checked, plus which data pat
 GET  /runs/{id}/record             the decision record: answer, sources, scores, signature
 POST /runs/{id}/dispatch           post the decision to DECISION_WEBHOOK, off unless set
 GET  /views/{name}                  rows of one allowlisted contract view (bare JSON array)
+GET  /watch/events                 control tower activity feed (?since=<id>&limit=N), oldest first
+GET  /watch/stream                 SSE of new feed events (`watch` events; Last-Event-ID or ?since= resumes)
+GET  /watch/status                 last scan, counts, loop and auto-assess switch with its caps
+POST /watch/cycle                  one scan now (the console's "Scan now"), rate limited
+POST /watch/auto-assess            {enabled: bool}: the auto-assess switch (default off; model calls)
 GET  /health                       liveness: service, graph, version. Touches nothing.
 GET  /ready                        readiness: Zetaris answers a trivial query (503 if not)
 GET  /version                      build sha and timestamp
@@ -41,21 +46,23 @@ GET  /runs/{id}/events             SSE: `started` per node as it begins (backgro
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
+import os
 import re
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from pydantic import BaseModel
 
 from floodsense_agents import __version__
-from floodsense_agents import desk, front_door, labelling, router
+from floodsense_agents import desk, front_door, labelling, router, tower
 from floodsense_agents.events import ALIASES, EVENTS, HAZARD_VIEWS, hazard_schema, spec
 from floodsense_agents.models import ApprovalDecision, RunRequest
-from floodsense_agents.nightshift import available_providers
 from floodsense_agents.readiness import report as readiness_report
 from floodsense_agents.verify import report as verify_report
 from floodsense_agents.runtime import NotAwaitingApproval, RunNotFound, Runtime, ThreadNotFound
@@ -81,6 +88,36 @@ def runtime() -> Runtime:
 def set_runtime(rt: Runtime) -> None:
     global _rt
     _rt = rt
+
+
+_tower: tower.ControlTower | None = None
+
+
+def control_tower() -> tower.ControlTower:
+    """The watch loop and its feed (tower.py). Built on first use, hooked into the run lifecycle."""
+    global _tower
+    if _tower is None:
+        _tower = tower.ControlTower(lambda: runtime().deps.zetaris, runtime)
+        runtime().observers.append(_tower.on_run)
+    return _tower
+
+
+def set_tower(t: tower.ControlTower | None) -> None:
+    global _tower
+    _tower = t
+    if t is not None:
+        rt = runtime()
+        if t.on_run not in rt.observers:
+            rt.observers.append(t.on_run)
+
+
+@app.on_event("startup")
+def _start_watch_loop() -> None:
+    """FF_WATCH_LOOP (default on) starts the rule-based scan; FF_WATCH_LOOP=false leaves it off."""
+    try:
+        control_tower().start()
+    except Exception:  # noqa: BLE001 - the service stays up without the loop
+        logging.getLogger("floodsense.tower").exception("watch loop did not start")
 
 
 def _envelope(body: dict) -> dict:
@@ -346,6 +383,8 @@ def config():
                 "FF_RAG_DOCS": settings.ff_rag_docs,
                 # Router quick lane: part of the API cache fingerprint (app/cache.py).
                 "FF_QUICK_LANE": router.enabled(),
+                # Router forecast lane (nodes/forecast.py): also part of the fingerprint.
+                "FF_FORECAST_LANE": router.forecast_enabled(),
             },
             "lanes": {"fast": settings.lane("fast"), "deep": settings.lane("deep")},
             "engines_url": settings.engines_url,
@@ -355,10 +394,23 @@ def config():
             "judge_repair_rounds": settings.judge_repair_rounds,
             "judge_min_score": settings.judge_min_score,
             "events": ["EMSR773", "EMSR517"],
-            # Test-only switch; one entry unless LLM_PROVIDER_SWITCH and a key are set.
-            "llm_providers": available_providers(),
+            # Control tower: the rule-based watch loop and the auto-assess switch with its caps.
+            # Not under flags: the switch moves at runtime and flags are in the API cache key.
+            "watch": _watch_config(),
         }
     )
+
+
+def _watch_config() -> dict:
+    t = control_tower()
+    a = t.auto_status()
+    return {
+        "FF_WATCH_LOOP": t.loop_enabled,
+        "interval_s": t.interval_s,
+        "FF_AUTO_ASSESS": a["enabled"],
+        "auto_assess_per_hour": a["per_hour"],
+        "auto_assess_per_day": a["per_day"],
+    }
 
 
 def _front_door_reply(req: RunRequest) -> dict | None:
@@ -538,6 +590,119 @@ async def events(run_id: str):
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+STREAM_MAX_S = 900.0  # one SSE connection lives this long; the client reconnects with Last-Event-ID
+STREAM_POLL_S = 1.0
+STREAM_MAX_CONNECTIONS = 20  # open /watch/stream connections; more get 429
+_streams = 0
+
+
+class AutoAssess(BaseModel):
+    enabled: bool
+
+
+def _watch_envelope(body: dict) -> dict:
+    return _envelope(body)
+
+
+@app.get("/watch/events")
+def watch_events(since: str | None = None, limit: int = 100):
+    """The activity feed, oldest first. ``since`` is an event id; without it, the newest ``limit``."""
+    t = control_tower()
+    return _watch_envelope(
+        {"events": t.store.since(since, limit), "latest_id": t.store.latest_id()}
+    )
+
+
+@app.get("/watch/status")
+def watch_status():
+    return _watch_envelope(control_tower().status())
+
+
+@app.post("/watch/cycle")
+def watch_cycle():
+    """One scan now. Answers 202 at once with the status; the scan runs on a thread and its events
+    arrive in the feed. 429 when one was requested a moment ago; a scan already running is reported."""
+    t = control_tower()
+    out = t.force()
+    if not out.get("ran") and out.get("retry_after_s"):
+        return JSONResponse(
+            _watch_envelope({"detail": out["reason"], "cycle": out, "status": t.status()}),
+            status_code=429,
+            headers={"Retry-After": str(out["retry_after_s"])},
+        )
+    return JSONResponse(
+        _watch_envelope({"cycle": out, "status": t.status()}),
+        status_code=202 if out.get("started") else 200,
+    )
+
+
+def _admin_ok(token: str | None) -> bool:
+    """WATCH_ADMIN_TOKEN, when set, is required (header x-watch-admin-token) to change the switch."""
+    want = os.environ.get("WATCH_ADMIN_TOKEN") or ""
+    return not want or hmac.compare_digest(want.encode(), (token or "").encode())
+
+
+@app.post("/watch/auto-assess")
+def watch_auto_assess(body: AutoAssess, x_watch_admin_token: str | None = Header(default=None)):
+    """The auto-assess switch (model calls, capped). Resets to FF_AUTO_ASSESS when the service restarts.
+
+    401 without the admin token when WATCH_ADMIN_TOKEN is set; 409 when switching on would be unsafe
+    (nothing is saved between restarts, so the caps could not hold).
+    """
+    if not _admin_ok(x_watch_admin_token):
+        raise HTTPException(401, "this switch needs the admin token (x-watch-admin-token)")
+    t = control_tower()
+    if body.enabled and t.persisted_reason is not None:
+        raise HTTPException(409, f"auto-assess stays off: {t.persisted_reason}")
+    t.set_auto_assess(body.enabled)
+    return _watch_envelope(t.status())
+
+
+@app.get("/watch/stream")
+async def watch_stream(request: Request, since: str | None = None):
+    """SSE: every new feed event as `event: watch` with its id, plus a comment heartbeat.
+
+    Resumes after ``?since=`` or the Last-Event-ID header; a fresh client starts at "now".
+    """
+    global _streams
+    t = control_tower()
+    if _streams >= STREAM_MAX_CONNECTIONS:
+        return JSONResponse(
+            {"detail": "too many open feed streams"}, status_code=429, headers={"Retry-After": "30"}
+        )
+    cursor = since or request.headers.get("last-event-id") or t.store.latest_id()
+    _streams += 1
+
+    async def gen():
+        global _streams
+        try:
+            async for chunk in _stream_body():
+                yield chunk
+        finally:
+            _streams -= 1
+
+    async def _stream_body():
+        nonlocal cursor
+        t0, last_beat = time.time(), time.time()
+        yield "retry: 3000\n\n"
+        while time.time() - t0 < STREAM_MAX_S:
+            if await request.is_disconnected():
+                return
+            fresh = t.store.since(cursor or "w0", 100)
+            for ev in fresh:
+                cursor = ev["id"]
+                yield f"id: {ev['id']}\nevent: watch\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                last_beat = time.time()
+            if time.time() - last_beat > 15:
+                yield ": keep-alive\n\n"
+                last_beat = time.time()
+            await asyncio.sleep(STREAM_POLL_S)
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream", headers={"cache-control": "no-store"}
+    )
+
+
 # GET /views/{name}. Column types from contracts/views.yaml. Only these names
 # reach SQL, and only as identifiers from this dict, never from the request.
 _NUM, _BOOL = "double", "boolean"
@@ -565,6 +730,7 @@ VIEW_COLUMNS: dict[str, dict[str, str]] = {
     "eu_watch": {
         k: _NUM for k in ("lat", "lon", "discharge_m3s", "forecast_max_m3s", "past30_median_m3s")
     },
+    "weather_forecast": {k: _NUM for k in ("lat", "lon", "lead_h", "precip_mm")},
     "provenance": {},
 }
 # No contract view has an event_id column today; the filter applies only if one does.
@@ -614,6 +780,7 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
         "segment",
     ),
     "eu_watch": ("point_id", "name", "river", "lat", "lon", "band"),
+    "weather_forecast": ("point_id", "name", "lat", "lon", "lead_h", "ts_utc", "precip_mm"),
     "provenance": ("dataset", "source_url", "publisher", "licence", "attribution", "fetched_at"),
 }
 

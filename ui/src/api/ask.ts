@@ -1,6 +1,5 @@
 import { apiBaseUrl } from "./config";
 import { adoptRunBody, type RecordedRun } from "./replay";
-import type { LlmProvider } from "../lib/llmProvider";
 import { withAskContext, type AskContext } from "../lib/askContext";
 import { modelChip } from "../lib/modelChip";
 
@@ -9,14 +8,13 @@ export const DEFAULT_EVENT_ID = "EMSR773";
 export interface AskInput {
   question: string;
   eventId?: string;
-  provider: LlmProvider;
-  /** Providers GET /config listed. The provider is sent only when it is one of them. */
-  allowedProviders: readonly string[];
   threadId?: string | null;
   /** "live" reads hazard_now (past days and the next 48 h). Unset lets the agents classify the question. */
   mode?: AskMode;
   /** Screen context (role, page, point, replay moment). Sent as `context` only through withAskContext. */
   context?: AskContext | null;
+  /** The replay "now" (ISO, e.g. 2021-07-14T00:00:00Z) for a rehearsal of a past event. Sent as replay_ts. */
+  replayTs?: string | null;
 }
 
 export type AskMode = "live" | "event";
@@ -27,7 +25,12 @@ export function modeForPage(page: string | null | undefined): AskMode | undefine
 }
 
 /** The question the Now page pre-fills. Not sent until the reader presses Send. */
-export const NEXT_48H_QUESTION = "Is any Valencia point at risk in the next 48 hours?";
+export const NEXT_48H_QUESTION = "Do the next 48 hours look safe across our watch?";
+
+/** The one-click "Is the next 48 h safe here?" question for a named place (or the whole watch). Never sent on its own. */
+export function next48hQuestion(place?: string | null): string {
+  return place && place.trim() ? `Do the next 48 hours look safe at ${place.trim()}?` : NEXT_48H_QUESTION;
+}
 
 /** Pure: the answer header line for the run's effective mode. Null when the body does not say. */
 export function modeLabel(run: Pick<RecordedRun, "mode" | "eventId">): string | null {
@@ -61,9 +64,9 @@ export function buildRunRequest(input: AskInput): Record<string, unknown> {
   // No event_id unless the page has one: the agents route an unset event by the
   // question (Rhine, Köln, Ahr -> EMSR517) and default to EMSR773 otherwise.
   if (input.eventId) body.event_id = input.eventId;
-  if (input.allowedProviders.includes(input.provider)) body.llm_provider = input.provider;
   if (input.threadId) body.thread_id = input.threadId;
   if (input.mode) body.mode = input.mode;
+  if (input.replayTs) body.replay_ts = input.replayTs;
   return withAskContext(body, input.context);
 }
 
@@ -125,7 +128,7 @@ export function mapRunResponse(status: number, body: unknown, retryAfter: string
     };
   }
   if (status === 422) {
-    return { ok: false, kind: "provider", message: `Request refused: ${detailOf(body) ?? "this model provider is not allowed here."}` };
+    return { ok: false, kind: "provider", message: `Request refused: ${detailOf(body) ?? "the service did not accept it."}` };
   }
   if (status >= 500) {
     return { ok: false, kind: "server", message: `The service failed (${status})${detailOf(body) ? `: ${detailOf(body)}` : ""}.` };

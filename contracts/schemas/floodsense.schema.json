@@ -301,9 +301,11 @@
         },
         "judge": { "$ref": "#/$defs/judge" },
         "lane": {
-          "enum": ["quick", "full"],
-          "description": "Which agent path answered: quick (live watcher, deterministic template claims, deterministic Judge; no model call, no playbook, no HITL) or full (the deep investigation). Omitted by runs recorded before the router."
+          "enum": ["quick", "forecast", "full"],
+          "description": "Which agent path answered: quick (live watcher, deterministic template claims, deterministic Judge; no model call, no playbook, no HITL), forecast (weather_forecast, the GloFAS discharge forecast, the gauge, past patterns, H-MEM; deterministic claims and a template lead, no model call, deterministic Judge; no playbook, no HITL) or full (the deep investigation). Omitted by runs recorded before the router."
         },
+        "forecast": { "$ref": "#/$defs/forecast" },
+        "plain": { "$ref": "#/$defs/plain" },
         "router_reason": {
           "type": "string",
           "description": "Why the router chose the lane, and any escalation (\"escalated: ...\")."
@@ -325,6 +327,44 @@
       "else": {
         "required": ["cached_at"],
         "properties": { "cached_at": { "$ref": "#/$defs/date_time" } }
+      }
+    },
+    "plain": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Quick and forecast lanes only. The calm, plain-language answer, built by fixed rules from the statuses the lane computed (no model call). The claims stay the cited detail. A calm headline only when every computed status is normal and the data is complete.",
+      "required": ["headline", "one_line", "horizon", "status", "next_step", "disclaimer", "details"],
+      "properties": {
+        "headline": { "type": "string", "minLength": 1, "description": "One short sentence: Nothing alarming expected at <place>. / Keep an eye on <place>: <reason>. / Water is high at <place>. Follow official warnings. / We can't fully check <place> right now." },
+        "one_line": { "type": "string", "minLength": 1, "description": "One plain sentence with the reason and the horizon. A number appears only when a cited claim states it." },
+        "horizon": { "enum": ["48h", "7d"], "description": "7d only when the question asked for the week and the 7-day river forecast (eu_watch) covers it." },
+        "status": { "enum": ["normal", "watch", "elevated", "unknown"] },
+        "basis": { "enum": ["gauge", "model"], "description": "What the status is measured against: a gauge level or a model." },
+        "places": { "type": "array", "items": { "type": "string" } },
+        "country": { "type": ["string", "null"], "description": "ISO alpha-2 of the first asked place; picks the official warning links." },
+        "countries": { "type": "array", "items": { "type": "string" }, "description": "ISO alpha-2 of every asked place's country, in order; the UI shows each country's official links." },
+        "service": { "type": "string", "description": "The official service to follow, named in words." },
+        "context": { "type": ["string", "null"], "description": "A history item framed as history (past flood, source, demo seed when seeded), cut at a sentence boundary. Never presented as current." },
+        "next_step": { "type": "string", "minLength": 1 },
+        "disclaimer": { "type": "string", "minLength": 1 },
+        "details": { "type": "array", "items": { "type": "string" }, "description": "claim_id of every claim that is the cited detail." }
+      }
+    },
+    "forecast": {
+      "type": "object",
+      "description": "Forecast lane only. A FloodSense screening status and a template lead; never an official warning.",
+      "required": ["status", "disclaimer"],
+      "properties": {
+        "status": { "enum": ["Normal", "Watch", "Elevated"] },
+        "status_label": { "type": "string", "description": "Status plus what drives it, for example Elevated (river model) or Watch (rain)." },
+        "status_reason": { "type": "string" },
+        "places": { "type": "array", "items": { "type": "string" } },
+        "horizon_h": { "type": "integer", "minimum": 1 },
+        "lead": { "type": "string", "description": "Template status line built from the claims; no model writes it." },
+        "screening": { "type": "string" },
+        "gaps": { "type": "array", "items": { "type": "string" } },
+        "disclaimer": { "type": "string", "minLength": 1 },
+        "attribution": { "type": "string" }
       }
     },
     "answer": {
@@ -354,6 +394,110 @@
         },
         "latency_ms": { "type": "integer", "minimum": 0 },
         "lane": { "const": "reply", "description": "The router lane: always reply here." }
+      }
+    },
+    "watch_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where a control tower event comes from: the contract view and the Zetaris query id of the read behind it. view is \"runs\" and query_id null for an event about an agent run, \"watch\" for the loop itself.",
+      "required": ["view"],
+      "properties": {
+        "view": { "type": "string", "minLength": 1 },
+        "query_id": { "type": ["string", "null"] }
+      }
+    },
+    "watch_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One row of the control tower activity feed (GET /watch/events, SSE GET /watch/stream). The text comes from fixed templates and the rows read; no number is invented and no model writes it. id is \"w\" plus an 8-digit, strictly increasing sequence.",
+      "required": ["id", "ts", "kind", "agent", "place", "river", "country", "status", "tone", "text", "source", "data"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^w[0-9]{8}$" },
+        "ts": { "$ref": "#/$defs/date_time" },
+        "kind": {
+          "enum": ["detected", "checked", "exposure", "drafted", "awaiting_approval", "approved", "info"]
+        },
+        "agent": { "enum": ["Watch", "Forecast", "Exposure", "Playbook", "Judge", "Human"] },
+        "place_id": {
+          "type": ["string", "null"],
+          "description": "The watched source: gauge:<station>, model:<EU point>, valencia:<VAL point>. Null for an event about the loop or a run with no place."
+        },
+        "place": { "type": "string" },
+        "river": { "type": "string" },
+        "country": { "type": "string", "description": "ISO 3166-1 alpha-2, or empty." },
+        "status": {
+          "type": "string",
+          "description": "The source's plain status word at that moment (Normal, Above mean high water, Close to mean high water, Elevated (model), Watch (model), Far above its recent normal (model), Above its recent normal (model), No reading), or empty."
+        },
+        "tone": {
+          "enum": ["normal", "watch", "elevated", "neutral", "unknown"],
+          "description": "Colour class of the status. Never red; a model band is never a warning."
+        },
+        "text": { "type": "string", "minLength": 1 },
+        "run_id": { "type": ["string", "null"] },
+        "source": { "$ref": "#/$defs/watch_source" },
+        "detail": {
+          "type": ["string", "null"],
+          "description": "Optional technical detail (for example the raw upstream error of a failed read), kept out of the plain text. The UI shows it only in a collapsed Technical detail."
+        },
+        "data": {
+          "type": "object",
+          "description": "The numbers behind the sentence, read from the same rows (for example sites, insured_eur, rain_48h_mm, screening). Free keys."
+        }
+      }
+    },
+    "watch_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /watch/status: the control tower's loop, last scan, counts and the auto-assess switch with its caps.",
+      "required": ["note", "loop", "scanning", "started_at", "counts", "awaiting_run_ids", "auto_assess", "persisted", "served_from"],
+      "properties": {
+        "note": { "type": "string", "description": "The honest label: rule-based watchers, no model calls." },
+        "loop": {
+          "type": "object",
+          "required": ["enabled", "alive", "interval_s", "next_cycle_at"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "alive": { "type": "boolean" },
+            "interval_s": { "type": "number" },
+            "next_cycle_at": { "type": ["string", "null"] }
+          }
+        },
+        "scanning": { "type": "boolean" },
+        "started_at": { "$ref": "#/$defs/date_time" },
+        "last_cycle": {
+          "type": ["object", "null"],
+          "description": "The last finished scan: started_at, finished_at, duration_ms, trigger, sources, elevated, new, errors, auto_assess_run_id. Null before the first scan."
+        },
+        "counts": {
+          "type": "object",
+          "required": ["sources", "elevated", "events", "awaiting_approval"],
+          "properties": {
+            "sources": { "type": "integer", "minimum": 0 },
+            "elevated": { "type": "integer", "minimum": 0 },
+            "events": { "type": "integer", "minimum": 0 },
+            "awaiting_approval": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "latest_event_id": { "type": ["string", "null"] },
+        "awaiting_run_ids": { "type": "array", "items": { "type": "string" } },
+        "auto_assess": {
+          "type": "object",
+          "required": ["enabled", "per_hour", "per_day", "used_hour", "used_day", "next_allowed_at", "uses_model_calls"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "per_hour": { "type": "integer", "minimum": 0 },
+            "per_day": { "type": "integer", "minimum": 0 },
+            "used_hour": { "type": "integer", "minimum": 0 },
+            "used_day": { "type": "integer", "minimum": 0 },
+            "next_allowed_at": { "type": ["string", "null"] },
+            "uses_model_calls": { "const": true }
+          }
+        },
+        "persisted": { "type": "boolean" },
+        "persisted_reason": { "type": ["string", "null"], "description": "Why nothing is saved between restarts (auto-assess then stays off), or null." },
+        "served_from": { "enum": ["live", "cache", "replay"] },
+        "cached_at": { "type": ["string", "null"] }
       }
     },
     "run_response": {

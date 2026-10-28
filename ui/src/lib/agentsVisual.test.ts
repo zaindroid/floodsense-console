@@ -31,8 +31,8 @@ const run = adoptRunBody(sample as unknown as Record<string, unknown>, "f1673327
 describe("buildPipeline", () => {
   it("keeps the canonical node order and folds world_model into badges", () => {
     const model = buildPipeline(run);
-    // A run recorded before the router has no router or quick-lane steps, so they are not drawn.
-    const routerSteps = ["router", "live_watch", "quick_answer"];
+    // A run recorded before the router has no router, quick- or forecast-lane steps, so they are not drawn.
+    const routerSteps = ["router", "live_watch", "quick_answer", "forecast_data", "history", "forecast_answer"];
     expect(model.nodes.map((n) => n.id)).toEqual(PIPELINE_ORDER.filter((id) => !routerSteps.includes(id)));
     expect(model.nodes.some((n) => (n.id as string) === "world_model")).toBe(false);
   });
@@ -65,7 +65,7 @@ describe("buildPipeline", () => {
     ]);
   });
 
-  it("follows the shared provider rule: a Nemotron id is Nightshift, anthropic/ is the test switch", () => {
+  it("follows the shared provider rule: a Nemotron id is Nightshift", () => {
     const body = (extra: Record<string, unknown>, step: Record<string, unknown> = {}) =>
       adoptRunBody(
         {
@@ -81,7 +81,6 @@ describe("buildPipeline", () => {
     expect(text(body({}))).toMatch(/^Nightshift · /);
     // An explicit provider in the run or trace wins over the id rule.
     expect(text(body({ request: { llm_provider: "openrouter" } }))).toMatch(/^openrouter · /);
-    expect(text(body({}, { model_id: "anthropic/claude-haiku-4-5" }))).toMatch(/^Anthropic \(test switch\) · /);
     expect(text(body({ request: { llm_provider: "nightshift" } }))).toMatch(/^Nightshift · /);
     expect(text(body({}, { provider: "nightshift" }))).toMatch(/^Nightshift · /);
   });
@@ -96,19 +95,19 @@ describe("buildPipeline", () => {
     expect(mem("recalled 2 past approved finding(s)")).toEqual([{ kind: "hmem", text: "H-MEM recall · 2" }]);
   });
 
-  it("labels an anthropic/ model as the test switch and survives a bare body", () => {
+  it("shows an unknown model id as is and survives a bare body", () => {
     const bare = adoptRunBody(
       {
         served_from: "live",
         summary: "s",
         claims: [],
-        trace: [{ seq: 1, node: "investigator", lane: "fast", model_id: "anthropic/claude-sonnet-5-5", latency_ms: 900 }],
+        trace: [{ seq: 1, node: "investigator", lane: "fast", model_id: "acme/model-x", latency_ms: 900 }],
       },
       "x",
     )!;
     const model = buildPipeline(bare);
     expect(model.reviseRounds).toBe(0);
-    expect(model.nodes.find((n) => n.id === "investigator")!.badges).toEqual([{ kind: "model", text: "Anthropic (test switch) · anthropic/claude-sonnet-5-5" }]);
+    expect(model.nodes.find((n) => n.id === "investigator")!.badges).toEqual([{ kind: "model", text: "acme/model-x" }]);
     expect(model.nodes.find((n) => n.id === "watchers")!.status).toBe("skipped");
   });
 
@@ -155,8 +154,6 @@ describe("ask context", () => {
   it("rides on the run request", () => {
     const body = buildRunRequest({
       question: "q",
-      provider: "nightshift",
-      allowedProviders: [],
       context: { page: "replay", event_id: "EMSR517", replay_date: "2021-07-14T18:00:00Z" },
     });
     expect(body.context).toEqual({ page: "replay", event_id: "EMSR517", replay_date: "2021-07-14T18:00:00Z" });

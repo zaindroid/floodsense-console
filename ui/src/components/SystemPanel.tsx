@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchSystem } from "../api/system";
+import { SEEDED_MEMORY_CHIP, seededMemoryNote } from "../lib/hitl";
 import {
   SYSTEM_POLL_MS,
   countText,
@@ -7,7 +8,6 @@ import {
   laneLabel,
   liveSummary,
   modelName,
-  providersLabel,
   shortUtc,
   type SystemStatus,
 } from "../lib/system";
@@ -105,9 +105,12 @@ function MemoryCard({ status }: { status: SystemStatus | null }) {
         <ul className="system-list">
           {m.latest.map((item) => (
             <li key={item.id || item.text}>
-              <p className="system-text">{item.text}</p>
+              <p className="system-text">
+                {item.text}
+                {seededMemoryNote(item) && <span className="note"> {seededMemoryNote(item)}</span>}
+              </p>
               <p className="system-meta">
-                {item.seeded && <span className="chip chip--sample">seeded</span>} run {item.runId ?? "–"} · approved{" "}
+                {item.seeded && <span className="chip chip--sample">{seededMemoryNote(item) ? SEEDED_MEMORY_CHIP : "seeded"}</span>} run {item.runId ?? "–"} · approved{" "}
                 {shortUtc(item.approvedAt)}
               </p>
             </li>
@@ -179,7 +182,7 @@ function ModelsCard({ status }: { status: SystemStatus | null }) {
   return (
     <section className="card system-card" aria-label="Models and engines">
       <p className="section-label">Models &amp; engines</p>
-      <h2>{mo?.ok ? providersLabel(mo.providers) : "Models"}</h2>
+      <h2>{mo?.ok ? "Nightshift" : "Models"}</h2>
       <p className="note">Which language models answer, and whether the memory and World Model engines are up.</p>
       {mo?.ok ? (
         <ul className="system-list">

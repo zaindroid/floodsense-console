@@ -124,6 +124,7 @@ button.citation-marker[aria-expanded="true"] { background: var(--brand); color: 
 .hiw-agents li::before { content: counter(hiw) ". "; opacity: 0.7; }
 .hiw-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--gauge-unknown, #8a97a8); flex: none; vertical-align: middle; }
 .hiw-dot-ok { background: var(--risk-low); }
+.hiw-dot-partial { background: var(--risk-moderate); }
 .hiw-dot-off { background: var(--risk-moderate); }
 .hiw-dot-down { background: var(--risk-severe); }
 .hiw-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem; }

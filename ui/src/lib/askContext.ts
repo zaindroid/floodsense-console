@@ -9,6 +9,8 @@ export interface AskContext {
   page?: string;
   point_id?: string;
   place?: string;
+  /** PEGELONLINE station shortname (agents RunContext.station). */
+  station?: string;
   event_id?: string;
   /** ISO instant the disaster replay was scrubbed to. */
   replay_date?: string;

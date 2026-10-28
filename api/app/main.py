@@ -20,6 +20,7 @@ lookups use CACHE_LOOKUP_TIMEOUT_S, not the 600s run budget. Rate limits
 Retry-After. GET routes are not limited.
 
 GET  /health                      this service
+GET  /views/{name}                contract view rows, cached (app/views_cache.py): x-views-cache miss | hit | stale
 GET  /config                      flags and lanes, from the agents
 GET  /system                      read-only status: memory, cache, rate limits, models (app/system.py)
 POST /runs                        start a run; returns when the graph pauses for human approval
@@ -36,6 +37,11 @@ POST /runs (live reading)         the router's quick lane: status answered, lane
 POST /runs?wait=false             202 {run_id, thread_id, status: running} at once; follow /runs/{id}/events.
                                   Same bucket and in-flight cap; the slot is held until the run
                                   leaves `running`. A cache hit or a replay fallback still answers 200.
+GET  /watch/events                control tower feed (?since=<id>&limit=N), from the agents
+GET  /watch/status                last scan, counts, auto-assess switch and caps
+GET  /watch/stream                SSE of new feed events (proxied as-is)
+POST /watch/cycle                 one scan now ("Scan now"); WATCH_CYCLES_PER_MIN (6) per client, 429 + Retry-After
+POST /watch/auto-assess           {enabled}: the auto-assess switch (model calls, capped by the agents)
 GET  /runs/past                   earlier runs (?thread_id= for one conversation)
 GET  /runs/{id}                   run snapshot
 GET  /runs/{id}/replay            a recorded run, labelled replay
@@ -48,9 +54,11 @@ GET  /runs/{id}/citations         citation records + evidence + provenance
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import re
+import threading
 import time
 from typing import Any
 
@@ -71,8 +79,9 @@ from app.cache import (
 )
 from app.project import project_run
 from app.metrics import counters
-from app.ratelimit import RateLimiter
+from app.ratelimit import RateLimiter, TokenBuckets
 from app.system import build_system
+from app.views_cache import ViewsCache, WARM_VIEWS
 
 AGENTS_URL = os.environ.get("AGENTS_URL", "http://127.0.0.1:8100").rstrip("/")
 UI_ORIGINS = [
@@ -93,14 +102,17 @@ TIMEOUT = httpx.Timeout(
 
 app = FastAPI(title="FloodSense EU", version="0.12.0")
 cache = AnswerCache()
+views_cache = ViewsCache(cache._redis)
 limiter = RateLimiter()
+# "Scan now" and the auto-assess switch: a small bucket of their own, so they never spend a run token.
+watch_buckets = TokenBuckets(float(os.environ.get("WATCH_CYCLES_PER_MIN") or 6))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=UI_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
     # The UI reads the Zetaris query id and row metadata of /views from these headers.
-    expose_headers=["x-query-id", "x-schema", "x-source", "x-executed-at", "x-dropped-rows", "x-truncated", "Retry-After"],
+    expose_headers=["x-query-id", "x-schema", "x-source", "x-executed-at", "x-dropped-rows", "x-truncated", "x-views-cache", "x-views-age-s", "Retry-After"],
 )
 
 
@@ -121,10 +133,13 @@ async def _agents_request(
     body: dict | None = None,
     params: dict | None = None,
     timeout: httpx.Timeout | None = None,
+    headers: dict | None = None,
 ) -> httpx.Response:
     """One async client for every proxied call. SSE uses its own stream below."""
     async with httpx.AsyncClient(timeout=timeout or TIMEOUT) as client:
-        return await client.request(method, f"{AGENTS_URL}{path}", json=body, params=params)
+        return await client.request(
+            method, f"{AGENTS_URL}{path}", json=body, params=params, headers=headers
+        )
 
 
 def _attach_contract(path: str, response: Response) -> Response:
@@ -162,10 +177,16 @@ def _json_run(payload: dict, status_code: int) -> JSONResponse:
 
 
 async def _forward(
-    method: str, path: str, body: dict | None = None, params: dict | None = None
+    method: str,
+    path: str,
+    body: dict | None = None,
+    params: dict | None = None,
+    headers: dict | None = None,
 ) -> Response:
     try:
-        r = await _agents_request(method, path, body=body, params=params)
+        # headers only when there are some, so a stand-in for _agents_request keeps its old signature
+        extra = {"headers": headers} if headers else {}
+        r = await _agents_request(method, path, body=body, params=params, **extra)
     except httpx.HTTPError as e:
         raise HTTPException(503, f"agents service unreachable at {AGENTS_URL}: {type(e).__name__}")
     response = Response(
@@ -335,6 +356,7 @@ async def system() -> JSONResponse:
         agents_json=_agents_json,
         lookup_timeout=_lookup_timeout(),
     )
+    body["views_cache"] = views_cache.stats()
     return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
 
@@ -524,6 +546,83 @@ async def start_run(request: Request) -> Response:
     return resp
 
 
+@app.get("/watch/events")
+async def watch_events(since: str | None = None, limit: int = 100) -> Response:
+    params: dict = {"limit": limit}
+    if since:
+        params["since"] = since
+    return await _forward("GET", "/watch/events", params=params)
+
+
+@app.get("/watch/status")
+async def watch_status() -> Response:
+    return await _forward("GET", "/watch/status")
+
+
+def _watch_refusal(request: Request) -> JSONResponse | None:
+    wait = watch_buckets.take(_client_key(request))
+    if wait is None:
+        return None
+    return _too_many("rate limit: too many scans from this client", wait)
+
+
+@app.post("/watch/cycle")
+async def watch_cycle(request: Request) -> Response:
+    refused = _watch_refusal(request)
+    if refused is not None:
+        return refused
+    return await _forward("POST", "/watch/cycle")
+
+
+@app.post("/watch/auto-assess")
+async def watch_auto_assess(request: Request) -> Response:
+    refused = _watch_refusal(request)
+    if refused is not None:
+        return refused
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "request body must be UTF-8 JSON")
+    # WATCH_ADMIN_TOKEN, when set on the API, is required here and passed on to the agents.
+    want = os.environ.get("WATCH_ADMIN_TOKEN") or ""
+    got = request.headers.get("x-watch-admin-token") or ""
+    if want and not hmac.compare_digest(want.encode(), got.encode()):
+        raise HTTPException(401, "this switch needs the admin token (x-watch-admin-token)")
+    return await _forward(
+        "POST",
+        "/watch/auto-assess",
+        body=body if isinstance(body, dict) else {},
+        headers={"x-watch-admin-token": got} if got else None,
+    )
+
+
+@app.get("/watch/stream")
+async def watch_stream(request: Request, since: str | None = None) -> StreamingResponse:
+    """The feed as SSE, proxied as-is; Last-Event-ID is forwarded so a reconnect resumes."""
+    headers = {}
+    if request.headers.get("last-event-id"):
+        headers["last-event-id"] = request.headers["last-event-id"]
+
+    async def gen():
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0)) as client:
+                async with client.stream(
+                    "GET",
+                    f"{AGENTS_URL}/watch/stream",
+                    params={"since": since} if since else None,
+                    headers=headers,
+                ) as r:
+                    if r.status_code != 200:
+                        yield f'event: error\ndata: {{"status": {r.status_code}}}\n\n'
+                        return
+                    async for chunk in r.aiter_text():
+                        yield chunk
+        except httpx.HTTPError as e:
+            yield f'event: error\ndata: {{"error": "agents service unreachable: {type(e).__name__}"}}\n\n'
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"cache-control": "no-store"})
+
+
 @app.get("/runs/past")
 async def past_runs(limit: int = 50, thread_id: str | None = None) -> Response:
     params: dict = {"limit": limit}
@@ -534,29 +633,57 @@ async def past_runs(limit: int = 50, thread_id: str | None = None) -> Response:
 
 @app.get("/views/{name}")
 async def get_view(name: str, event_id: str | None = None, source: str | None = None) -> Response:
-    """Rows of one contract view. Not cached, not rate limited.
+    """Rows of one contract view, through the views cache (app/views_cache.py). Not rate limited.
 
-    source=replay asks for the event replay's schema (floodsense_seed for the Ahr);
-    the agents service validates it.
+    The live REST-backed views are cached per name and query string (x-views-cache: miss | hit),
+    and a copy up to 24 h old is served when the upstream fails (x-views-cache: stale,
+    x-views-age-s). source=replay asks for the event replay's schema (floodsense_seed for
+    the Ahr); the agents service validates it.
     """
-    params: dict | None = {}
+    params: dict[str, str] = {}
     if event_id is not None:
         params["event_id"] = event_id
     if source is not None:
         params["source"] = source
-    params = params or None
+
+    async def upstream() -> tuple[int, str, str, dict[str, str]]:
+        r = await _agents_request("GET", f"/views/{name}", params=params or None)
+        headers = {k: v for k, v in r.headers.items() if k.lower().startswith("x-")}
+        return (
+            r.status_code,
+            r.content.decode("utf-8", errors="replace"),
+            r.headers.get("content-type", "application/json"),
+            headers,
+        )
+
     try:
-        r = await _agents_request("GET", f"/views/{name}", params=params)
+        served = await views_cache.get(name, params, upstream)
     except httpx.HTTPError as e:
         raise HTTPException(503, f"agents service unreachable at {AGENTS_URL}: {type(e).__name__}")
-    headers = {k: v for k, v in r.headers.items() if k.lower().startswith("x-")}
+    headers = served.response_headers()
     headers["cache-control"] = "no-store"
     return Response(
-        content=r.content,
-        status_code=r.status_code,
-        media_type=r.headers.get("content-type", "application/json"),
+        content=served.body,
+        status_code=served.status,
+        media_type=served.content_type,
         headers=headers,
     )
+
+
+def _fetch_view_sync(name: str) -> tuple[int, str, str, dict[str, str]]:
+    r = httpx.get(f"{AGENTS_URL}/views/{name}", timeout=TIMEOUT)
+    headers = {k: v for k, v in r.headers.items() if k.lower().startswith("x-")}
+    return r.status_code, r.text, r.headers.get("content-type", "application/json"), headers
+
+
+@app.on_event("startup")
+def _warm_views() -> None:
+    """Fill the views cache in the background: one call per live view, 5 s apart. /health never waits."""
+    if os.environ.get("VIEWS_CACHE_WARM", "1").strip().lower() in ("0", "false", "no", "off"):
+        return
+    threading.Thread(
+        target=views_cache.warm, args=(_fetch_view_sync, WARM_VIEWS), name="views-warm", daemon=True
+    ).start()
 
 
 @app.get("/runs/{run_id}")

@@ -186,6 +186,11 @@ _SUGGEST = {
         "What alerts would you draft for the Ahr 2021 event?",
         "Show the evidence behind the exposure for EMSR773.",
     ],
+    "operator": [
+        "Which gauges on the Elbe are above normal?",
+        "Brief me on the Rhine at Köln",
+        "What does the 48 h outlook show along the Danube?",
+    ],
 }
 
 _WHAT = {
@@ -198,6 +203,11 @@ _WHAT = {
         "I can show which insured sites are exposed to a flood, draft alerts that a "
         "person approves before anything is sent, and give the evidence and sources "
         "behind every number."
+    ),
+    "operator": (
+        "I can brief you on any of our 45 watched places, show upstream gauges, and prepare "
+        "a script for callers. Every line comes from a stated source, and I never issue "
+        "a warning or a forecast of my own."
     ),
 }
 

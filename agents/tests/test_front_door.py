@@ -126,6 +126,29 @@ class ReplyTest(unittest.TestCase):
         self.assertIn("approves", ins["answer"])
         self.assertIn("evidence", ins["answer"])
 
+    def test_operator_reply(self) -> None:
+        op = fd.front_door(
+            RunRequest(question="what can you do?", context=RunContext(role="operator")), None
+        )
+        self.assertEqual(op["intent"], "help")
+        self.assertIn("45 watched places", op["answer"])
+        self.assertIn("script for callers", op["answer"])
+        self.assertNotIn("insured", op["answer"])
+        self.assertEqual(
+            op["suggestions"],
+            [
+                "Which gauges on the Elbe are above normal?",
+                "Brief me on the Rhine at Köln",
+                "What does the 48 h outlook show along the Danube?",
+            ],
+        )
+        # Every operator suggestion is a flood question, so a click goes to a run, never a reply.
+        for q in op["suggestions"]:
+            self.assertEqual(fd.rules(q), ("flood_question", True), q)
+        # The other roles keep their own text.
+        self.assertNotEqual(op["answer"], fd.reply_text("help", "citizen")[0])
+        self.assertNotEqual(op["answer"], fd.reply_text("help", "insurer")[0])
+
     def test_explicit_requests_always_run(self) -> None:
         self.assertIsNone(fd.front_door(RunRequest(question="hello", event_id="EMSR773"), None))
         self.assertIsNone(fd.front_door(RunRequest(question="hello", doc_query="EFAS"), None))

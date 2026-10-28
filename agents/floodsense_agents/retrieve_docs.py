@@ -71,6 +71,10 @@ _INSURER_WORDS = re.compile(
 # Event country. rag.chunks has no country column, so the allowed generic doc_ids
 # come from rag_scope.json, which scripts/rag_corpus.py writes from corpus/manifest.yaml.
 _EVENT_COUNTRY = {"EMSR773": "ES", "EMSR517": "DE"}
+# The Europe live watch (events.WATCH_EVENT) has no event passages. Its run searches
+# only the event-agnostic documents in rag_scope.json: all of them, or, when the
+# filters carry a country, that country's and the EU-wide ones.
+WATCH_EVENT = "LIVE-EU"
 _SCOPE_FILE = Path(__file__).resolve().parent / "rag_scope.json"
 
 Embedder = Callable[[list[str], str], list[list[float]]]
@@ -132,13 +136,23 @@ def retrieve_docs(
         return RetrieveResult([], _short(exc))
     if not vectors:
         return RetrieveResult([], "embedder returned no vector")
-    try:
-        ranked = search(vectors[0], event_id, k)
-    except Exception as exc:
-        return RetrieveResult([], _short(exc))
-    ranked = list(ranked)[:k]
+    if event_id == WATCH_EVENT:
+        allowed = watch_doc_ids(
+            load_watch_scope() if scope is None else scope, (filters or {}).get("country")
+        )
+        if search_generic is None or not allowed:
+            return RetrieveResult([], None)
+        try:
+            ranked = list(search_generic(vectors[0], allowed, k))[:k]
+        except Exception as exc:
+            return RetrieveResult([], _short(exc))
+    else:
+        try:
+            ranked = list(search(vectors[0], event_id, k))[:k]
+        except Exception as exc:
+            return RetrieveResult([], _short(exc))
     generic_ids: set[str] = set()
-    if event_id is not None and search_generic is not None and wants_generic(query, filters):
+    if event_id in _EVENT_COUNTRY and search_generic is not None and wants_generic(query, filters):
         allowed = generic_doc_ids(event_id, load_scope() if scope is None else scope)
         if allowed:
             try:
@@ -193,18 +207,39 @@ def generic_doc_ids(event_id: str, scope: dict[str, str]) -> list[str]:
     return sorted(doc_id for doc_id, c in scope.items() if c in ("EU", country))
 
 
+def watch_doc_ids(scope: dict[str, str], country: object = None) -> list[str]:
+    """Event-agnostic doc_ids a LIVE-EU run may read: all, or EU-wide plus one country."""
+    if isinstance(country, str) and country.strip():
+        wanted = ("EU", country.strip().upper())
+        return sorted(doc_id for doc_id, c in scope.items() if c in wanted)
+    return sorted(scope)
+
+
 _SCOPE_CACHE: dict[str, str] | None = None
 
 
+_WATCH_CACHE: dict[str, str] | None = None
+
+
+def load_watch_scope() -> dict[str, str]:
+    """doc_id -> country of every event-agnostic document (the LIVE-EU run's scope)."""
+    global _WATCH_CACHE
+    if _WATCH_CACHE is None:
+        load_scope()
+    return _WATCH_CACHE or {}
+
+
 def load_scope() -> dict[str, str]:
-    """doc_id -> country of the event-agnostic documents. Read once per process."""
-    global _SCOPE_CACHE
+    """doc_id -> country of the event-agnostic insurer/authority documents (the event-run
+    add-on). Citizen-audience river history is only in the watch scope. Read once."""
+    global _SCOPE_CACHE, _WATCH_CACHE
     if _SCOPE_CACHE is None:
         import json
 
         try:
             data = json.loads(_SCOPE_FILE.read_text(encoding="utf-8"))
             _SCOPE_CACHE = {str(k): str(v) for k, v in data.get("generic", {}).items()}
+            _WATCH_CACHE = {str(k): str(v) for k, v in data.get("watch", {}).items()}
         except (OSError, ValueError, AttributeError) as exc:
             import logging
 
@@ -213,6 +248,7 @@ def load_scope() -> dict[str, str]:
                 exc.__class__.__name__,
             )
             _SCOPE_CACHE = {}
+            _WATCH_CACHE = {}
     return _SCOPE_CACHE
 
 
@@ -286,9 +322,9 @@ def _event_id(filters: dict | None) -> tuple[str | None, str | None]:
     if not filters or "event_id" not in filters or filters.get("event_id") is None:
         return None, None
     event_id = filters.get("event_id")
-    if event_id in _EVENTS:
+    if event_id in _EVENTS or event_id == WATCH_EVENT:
         return str(event_id), None
-    return None, "event_id must be EMSR773 or EMSR517"
+    return None, "event_id must be EMSR773, EMSR517 or LIVE-EU"
 
 
 def _positive_int(value: object) -> int | None:

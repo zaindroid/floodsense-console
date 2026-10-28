@@ -19,15 +19,10 @@ ENV VITE_API_URL=/api
 # arrive before the snapshot does, and a desk on fixtures is worse than a desk
 # that waited. The documented override exists for exactly this.
 ENV VITE_API_TIMEOUT_MS=6000
-# Ask FloodSense shows a recorded run rather than the fixture answer. This is a
-# Nightshift run on this deployment: approved, against the live Zetaris views,
-# graded by Nemotron 3.5 Super VL, and it carries a contract object.
-# adoptReplay refuses a run whose summary is empty, and the panel then falls
-# back to the fixture without saying so -- which is what the previous pin
-# (74ef0c508578) did once it was recorded before the empty-summary fix in #53.
-# Re-pin only to a run that has been read back from /runs/{id}/replay with a
-# non-empty summary.
-ENV VITE_REPLAY_RUN_ID=c2aeb76b51d1
+# VITE_REPLAY_RUN_ID is deliberately unset. The Review page now picks the
+# newest run that passed the Judge for the chosen mode and event; a
+# configured id wins over that and would freeze the page on one old run.
+# The empty-summary bug that the old pin worked around was fixed in #53.
 RUN npm run build
 
 # 2. the engines run TypeScript directly and have no runtime dependencies,
@@ -58,7 +53,7 @@ COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
 # Rewritten on every sync by .github/workflows/sync-from-monorepo.yml.
-ENV GIT_SHA=5df098294fcc3a80262e8d3f10c341ecd1b05090 BUILT_AT=2026-10-27T13:10:00Z SOURCE_REF=feat/ui-run-walkthrough
+ENV GIT_SHA=7b330a8611f519c8c72091326985b19727c3125f BUILT_AT=2026-10-28T07:14:49Z SOURCE_REF=feat/ui-run-walkthrough
 
 # 8080 is the only port Coolify's healthcheck targets. The other three
 # services stay on loopback: nothing inside here is reachable from outside

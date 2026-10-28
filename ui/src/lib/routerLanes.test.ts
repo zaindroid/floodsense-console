@@ -14,7 +14,6 @@ function run(lane: "quick" | "full", status: string, trace: ReplayStep[], router
     claims: [],
     judgeOverall: 1,
     judgePasses: true,
-    hallucinationRate: 0,
     flaggedClaimIds: [],
     trace,
     servedFrom: "live",

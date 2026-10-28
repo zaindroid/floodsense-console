@@ -250,6 +250,8 @@ def is_watch_only(target: dict | None) -> bool:
 _LIVE_CUE = re.compile(
     r"\b(?:right now|now|currently|current|today|tonight|tomorrow|at the moment|rising|"
     r"next (?:few )?\d* ?(?:h|hours?|days?)|coming (?:hours?|days?)|"
+    # Forward-looking cues (the forecast lane, router.py): still a present question.
+    r"this week|forecasts?|outlook|will\b[^?.!]{0,40}\b(?:rise|flood)|look (?:safe|ok)|"
     r"heute|jetzt|aktuell|derzeit|ahora|hoy|actualmente)\b",
     re.IGNORECASE | re.UNICODE,
 )
@@ -289,3 +291,65 @@ def place_words() -> tuple[str, ...]:
 
 def sql_list(values) -> str:
     return ", ".join("'" + str(v).replace("'", "''") + "'" for v in values)
+
+
+# The 45 watched places of the forecast lane, in the request order of migration 070
+# (location_id 0..44; Open-Meteo omits location_id for the first point). The view
+# floodsense.weather_forecast (071) carries the same ids, ASCII names and positions;
+# a test keeps this tuple and the migrations equal.
+#   (point_id, kind, ref, ascii name, river or area, lat, lon)
+# gauge: ref is the PEGELONLINE shortname (gauge_levels.station); position from
+#        gauge_levels (PEGELONLINE station metadata), rounded to 4 decimals.
+# eu: ref is the eu_watch point id, position the 063 GloFAS cell.
+# valencia: ref is the warehouse point id; ingestion/prep/valencia_points.csv.
+_GAUGE_POS: dict[str, tuple[str, float, float]] = {
+    "MAXAU": ("MAXAU", 49.039, 8.3056),
+    "MAINZ": ("MAINZ", 50.004, 8.2753),
+    "KAUB": ("KAUB", 50.0854, 7.765),
+    "KOBLENZ": ("KOBLENZ", 50.3586, 7.6047),
+    "ANDERNACH": ("ANDERNACH", 50.4434, 7.3921),
+    "BONN": ("BONN", 50.7364, 7.108),
+    "KÖLN": ("KOELN", 50.9369, 6.9633),
+    "DÜSSELDORF": ("DUESSELDORF", 51.2255, 6.7699),
+    "EMMERICH": ("EMMERICH", 51.8293, 6.2456),
+    "Trier UP": ("Trier UP", 49.7322, 6.6269),
+    "Cochem": ("Cochem", 50.1445, 7.1677),
+    "Fremersdorf": ("Fremersdorf", 49.4089, 6.6484),
+    "FRANKFURT OSTHAFEN": ("FRANKFURT OSTHAFEN", 50.1057, 8.715),
+    "WÜRZBURG": ("WUERZBURG", 49.7962, 9.926),
+    "Heidelberg UP": ("Heidelberg UP", 49.4147, 8.7177),
+    "Lauffen": ("Lauffen", 49.0723, 9.1598),
+    "DRESDEN": ("DRESDEN", 51.0545, 13.7388),
+    "MAGDEBURG-STROMBRÜCKE": ("MAGDEBURG-STROMBRUECKE", 52.1297, 11.6443),
+    "WITTENBERGE": ("WITTENBERGE", 52.9855, 11.7594),
+    "REGENSBURG EISERNE BRÜCKE": ("REGENSBURG EISERNE BRUECKE", 49.0214, 12.1018),
+    "PASSAU DONAU": ("PASSAU DONAU", 48.5761, 13.4591),
+    "FRANKFURT1 (ODER)": ("FRANKFURT1 (ODER)", 52.3578, 14.5517),
+    "HOHENSAATEN-FINOW": ("HOHENSAATEN-FINOW", 52.8647, 14.1411),
+    "HANN.MUENDEN": ("HANN.MUENDEN", 51.4258, 9.6409),
+    "PORTA": ("PORTA", 52.2487, 8.922),
+    "RHEINE UNTERSCHLEUSE": ("RHEINE UNTERSCHLEUSE", 52.288, 7.4341),
+}
+# (point_id, ASCII municipality, area from the csv's `why` column, lat, lon)
+_VALENCIA_POS: tuple[tuple[str, str, str, float, float], ...] = (
+    ("VAL01", "Paiporta", "Barranc del Poyo", 39.4278, -0.4172),
+    ("VAL02", "Catarroja", "Horta Sud", 39.4019, -0.4036),
+    ("VAL03", "Sedavi", "Horta Sud", 39.4267, -0.3836),
+    ("VAL04", "Alfafar", "Horta Sud", 39.4181, -0.3792),
+    ("VAL05", "Benetusser", "Horta Sud", 39.4244, -0.3969),
+    ("VAL06", "Algemesi", "Jucar", 39.1906, -0.4367),
+    ("VAL07", "Chiva", "Barranc del Poyo", 39.4694, -0.7186),
+    ("VAL08", "Utiel", "Plana de Utiel", 39.5683, -1.2056),
+)
+
+ForecastPoint = tuple[str, str, str, str, str, float, float]
+FORECAST_POINTS: tuple[ForecastPoint, ...] = (
+    *(
+        (f"PEG{n:02d}", "gauge", station, _GAUGE_POS[station][0], water, *_GAUGE_POS[station][1:])
+        for n, (station, water) in enumerate(STATIONS, start=1)
+    ),
+    *((p[0], "eu", p[0], p[1], p[3], p[4], p[5]) for p in EU_POINTS),
+    *((pid, "valencia", pid, name, area, lat, lon) for pid, name, area, lat, lon in _VALENCIA_POS),
+)
+FORECAST_BY_REF: dict[str, ForecastPoint] = {p[2]: p for p in FORECAST_POINTS}
+FORECAST_BY_ID: dict[str, ForecastPoint] = {p[0]: p for p in FORECAST_POINTS}

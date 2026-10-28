@@ -2,8 +2,10 @@
 import { useConsole } from "../context/ConsoleContext";
 import { useDismiss } from "../hooks/useDismiss";
 import { headerSubtitle } from "../lib/events";
+import { ModeSwitch } from "./ModeSwitch";
+import { useLiveWatch } from "../hooks/useLiveWatch";
+import { plainOf, worstFirst } from "../lib/places";
 import { applyTheme, readTheme, type ThemeName } from "../lib/theme";
-import { PROVIDER_LABELS, showProviderSelect, type LlmProvider } from "../lib/llmProvider";
 
 export function Header() {
   const desk = useConsole();
@@ -14,7 +16,11 @@ export function Header() {
   const profileRef = useRef<HTMLDivElement>(null);
   const bellTitle = useId();
   const profileTitle = useId();
-  const unread = desk.notices.filter((notice) => !notice.read).length;
+  const live = useLiveWatch();
+  // The bell's number is real: sources at their raised band right now (Live mode only), plus unread simulation notices.
+  const raised = desk.mode === "live" ? live.sources.filter((s) => s.status === "over") : [];
+  const watching = desk.mode === "live" ? live.sources.filter((s) => s.status === "near" || s.status === "over") : [];
+  const unread = raised.length + desk.notices.filter((notice) => !notice.read).length;
   const markNotificationsRead = desk.markNotificationsRead;
 
   useEffect(() => {
@@ -56,24 +62,11 @@ export function Header() {
           <a href="#/insurer" aria-current={desk.route === "insurer" ? "page" : undefined}>
             Insurer
           </a>
+          <a href="#/operator" aria-current={desk.route === "operator" ? "page" : undefined}>
+            Civil protection
+          </a>
         </nav>
         <div className="header-tools">
-          {showProviderSelect(desk.llmProviders) && (
-            <label className="llm-select" title="Local benchmarking only. The demo runs Nightshift.">
-              <span>LLM:</span>{" "}
-              <select
-                value={desk.llmProvider}
-                aria-label="LLM provider (test only)"
-                onChange={(event) => desk.setLlmProvider(event.target.value as LlmProvider)}
-              >
-                {desk.llmProviders.map((p) => (
-                  <option key={p} value={p}>
-                    {PROVIDER_LABELS[p]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           <button
             type="button"
             className="icon-button"
@@ -106,8 +99,21 @@ export function Header() {
                 <p className="menu-kicker" id={bellTitle}>
                   Notices
                 </p>
+                {desk.mode === "live" && live.sources.length > 0 && (
+                  <div className="notice">
+                    <p className="menu-title">Live watch</p>
+                    <p className="menu-body">
+                      {raised.length} of {live.sources.length} sources at their raised band; {watching.length - raised.length} slightly up.
+                      {worstFirst(watching).slice(0, 3).length > 0 &&
+                        ` Most notable: ${worstFirst(watching)
+                          .slice(0, 3)
+                          .map((s) => `${s.name} (${plainOf(s).word})`)
+                          .join(", ")}.`}
+                    </p>
+                  </div>
+                )}
                 {desk.notices.length === 0 ? (
-                  <p className="menu-body">No notices.</p>
+                  <p className="menu-body">{desk.mode === "live" && live.sources.length > 0 ? "No other notices." : "No notices."}</p>
                 ) : (
                   <ul className="notice-list">
                     {desk.notices.map((notice) => (
@@ -148,6 +154,7 @@ export function Header() {
           </div>
         </div>
       </div>
+      <ModeSwitch />
     </header>
   );
 }

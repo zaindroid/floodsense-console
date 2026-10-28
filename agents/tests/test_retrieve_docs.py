@@ -206,6 +206,62 @@ class GenericRankingTest(unittest.TestCase):
         self.assertNotIn("de-1", ids)
         self.assertEqual(ids[:3], ["ev773-a", "ev773-b", "ev773-c"])
 
+    def test_watch_run_reads_only_event_agnostic_documents(self) -> None:
+        ids = self._run("When did the Elbe flood?", "LIVE-EU", k=4)
+        self.assertEqual(ids, ["es-1", "de-1", "eu-1", "eu-2"])
+        self.assertFalse(any(i.startswith("ev") for i in ids))
+
+    def test_watch_run_with_a_country_keeps_that_country_and_eu(self) -> None:
+        result = retrieve_docs(
+            "When did the Elbe flood?",
+            4,
+            {"event_id": "LIVE-EU", "country": "de"},
+            embedder=lambda texts, _kind: [[1.0, 0.0]],
+            search=self._search,
+            hydrate=self._hydrate,
+            search_generic=self._generic,
+            scope=self.SCOPE,
+        )
+        self.assertIsNone(result.error)
+        self.assertEqual(
+            [c["chunk_id"] for c in result.citations], ["de-1", "eu-1", "eu-2", "eu-3"]
+        )
+
+    def test_committed_scope_has_the_river_history_documents(self) -> None:
+        watch = retrieve_mod.load_watch_scope()
+        self.assertEqual(watch.get("wiki-2002-european-floods"), "EU")
+        self.assertIn("wiki-2002-european-floods", retrieve_mod.watch_doc_ids(watch, "CZ"))
+        self.assertNotIn("wiki-seine", retrieve_mod.watch_doc_ids(watch, "DE"))
+
+    def test_river_history_never_takes_an_insurer_slot_in_an_event_run(self) -> None:
+        scope = retrieve_mod.load_scope()
+        self.assertIn("eiopa-19-485", scope)
+        for event in ("EMSR773", "EMSR517"):
+            allowed = retrieve_mod.generic_doc_ids(event, scope)
+            self.assertTrue(allowed)
+            self.assertFalse([d for d in allowed if d.startswith("wiki-")])
+
+    def test_wiki_chunks_nearer_than_eiopa_do_not_displace_it_in_event_runs(self) -> None:
+        chunks = (
+            ("wiki-near", "wiki-2013-european-floods", (1.0, 0.0)),
+            ("eiopa-far", "eiopa-19-485", (0.6, 0.8)),
+        )
+
+        def generic(vector, doc_ids, k):
+            rows = [c for c in chunks if c[1] in doc_ids]
+            return [(c[0], 1.0 - c[2][0]) for c in rows][:k]
+
+        result = retrieve_docs(
+            "insurance protection gap",
+            1,
+            {"event_id": "EMSR773"},
+            embedder=lambda texts, _kind: [[1.0, 0.0]],
+            search=lambda v, e, k: [("ev", 0.1)],
+            hydrate=lambda ids: ("q", [_hit_row(i, f"text {i}", 1) for i in ids]),
+            search_generic=generic,
+        )
+        self.assertEqual([c["chunk_id"] for c in result.citations], ["ev", "eiopa-far"])
+
     def test_no_generic_without_insurer_words_or_role(self) -> None:
         self.assertEqual(
             self._run("How much rain fell in Chiva?", "EMSR773"), ["ev773-a", "ev773-b"]

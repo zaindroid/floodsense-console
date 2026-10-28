@@ -1,4 +1,6 @@
 import { asGaugeLevelRow, asHazardNowRow, parseList, type GaugeLevelRow, type HazardNowRow } from "../lib/now";
+import { demoFetch, isDemo } from "../lib/demo";
+import { cacheInfoOf, type ViewCacheInfo } from "../lib/staleness";
 import { apiBaseUrl, apiTimeoutMs } from "./config";
 
 export interface HazardNowResult {
@@ -7,6 +9,7 @@ export interface HazardNowResult {
   queryId: string | null;
   executedAt: string | null;
   truncated: boolean;
+  cache?: ViewCacheInfo;
 }
 
 /** Caller's signal (unmount, refresh) plus the configured timeout. */
@@ -25,7 +28,7 @@ function signalFor(signal: AbortSignal): AbortSignal {
 }
 
 async function getJson(path: string, signal: AbortSignal): Promise<{ body: unknown; headers: Headers }> {
-  const response = await fetch(`${apiBaseUrl()}${path}`, { credentials: "omit", signal: signalFor(signal) });
+  const response = await (isDemo() ? demoFetch : fetch)(`${apiBaseUrl()}${path}`, { credentials: "omit", signal: signalFor(signal) });
   if (!response.ok) throw new Error(`GET ${path} returned ${response.status}`);
   return { body: await response.json(), headers: response.headers };
 }
@@ -42,6 +45,7 @@ export async function fetchHazardNow(signal: AbortSignal): Promise<HazardNowResu
     queryId: headers.get("x-query-id"),
     executedAt: headers.get("x-executed-at"),
     truncated: headers.get("x-truncated") === "true",
+    cache: cacheInfoOf("hazard_now", headers),
   };
 }
 

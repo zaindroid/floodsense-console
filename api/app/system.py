@@ -126,9 +126,35 @@ def _models(config: dict[str, Any] | None, latest: dict[str, Any] | None) -> dic
     return {
         "ok": True,
         "lanes": {k: str(v) for k, v in (config.get("lanes") or {}).items()},
-        "llm_providers": [str(p) for p in (config.get("llm_providers") or [])],
         "flags": {k: bool(v) for k, v in flags.items()},
         "latest_model_ids": (latest or {}).get("model_ids") or [],
+    }
+
+
+def _watch(status: dict[str, Any] | None) -> dict[str, Any]:
+    """The control tower, from the agents' GET /watch/status. Counts and switches only."""
+    if not isinstance(status, dict) or "loop" not in status:
+        return {"ok": False, "error": "agents /watch/status not reachable"}
+    last = status.get("last_cycle") or {}
+    auto = status.get("auto_assess") or {}
+    counts = status.get("counts") or {}
+    return {
+        "ok": True,
+        "loop_enabled": bool((status.get("loop") or {}).get("enabled")),
+        "interval_s": (status.get("loop") or {}).get("interval_s"),
+        "last_cycle_at": last.get("finished_at"),
+        "sources": counts.get("sources"),
+        "elevated": counts.get("elevated"),
+        "events": counts.get("events"),
+        "awaiting_approval": counts.get("awaiting_approval"),
+        "auto_assess": {
+            "enabled": bool(auto.get("enabled")),
+            "per_hour": auto.get("per_hour"),
+            "per_day": auto.get("per_day"),
+            "used_hour": auto.get("used_hour"),
+            "used_day": auto.get("used_day"),
+        },
+        "model_calls": "none in the loop; only an auto-assessed full run uses the model",
     }
 
 
@@ -149,7 +175,13 @@ async def build_system(
         code, data = await agents_json("GET", "/config", timeout=lookup_timeout)
         return data if code == 200 and isinstance(data, dict) else None
 
-    cfg, latest = await asyncio.gather(config(), _latest_run(agents_json, lookup_timeout))
+    async def watch():
+        code, data = await agents_json("GET", "/watch/status", timeout=lookup_timeout)
+        return data if code == 200 and isinstance(data, dict) else None
+
+    cfg, latest, watch_status = await asyncio.gather(
+        config(), _latest_run(agents_json, lookup_timeout), watch()
+    )
 
     memory: dict[str, Any]
     world: dict[str, Any]
@@ -220,6 +252,7 @@ async def build_system(
         "world_model": world,
         "models": _models(cfg, latest),
         "latest_run": latest,
+        "watch": _watch(watch_status),
         "rag": {
             "enabled": bool(flags.get("FF_RAG_DOCS")) if cfg else None,
             "documents": None,

@@ -7,6 +7,9 @@ export const PIPELINE_ORDER = [
   "scope",
   "live_watch",
   "quick_answer",
+  "forecast_data",
+  "history",
+  "forecast_answer",
   "watchers",
   "memory",
   "investigator",
@@ -24,6 +27,9 @@ export const NODE_LABELS: Record<PipelineNodeId, string> = {
   scope: "Scope",
   live_watch: "Live data",
   quick_answer: "Quick answer",
+  forecast_data: "Forecast data",
+  history: "History",
+  forecast_answer: "Forecast answer",
   watchers: "Watchers",
   memory: "Memory",
   investigator: "Investigator",
@@ -74,8 +80,23 @@ export interface PipelineModel {
 
 /** The quick lane's steps (router.py): no Playbook, no human review. */
 export const QUICK_ORDER: readonly PipelineNodeId[] = ["router", "scope", "live_watch", "quick_answer", "judge"];
-/** Steps only the quick lane runs; a full run shows them only after an escalation. */
-const QUICK_ONLY: readonly PipelineNodeId[] = ["live_watch", "quick_answer"];
+/** The forecast lane's steps (nodes/forecast.py): no Playbook, no human review. */
+export const FORECAST_ORDER: readonly PipelineNodeId[] = [
+  "router",
+  "scope",
+  "forecast_data",
+  "history",
+  "forecast_answer",
+  "judge",
+];
+/** Steps only the quick or forecast lane runs; a full run shows them only after an escalation. */
+export const QUICK_ONLY: readonly PipelineNodeId[] = [
+  "live_watch",
+  "quick_answer",
+  "forecast_data",
+  "history",
+  "forecast_answer",
+];
 
 /** The run status a person reads. A quick answer has no outbound action, so no human review. */
 export function statusText(status: string | null | undefined): string {
@@ -96,6 +117,7 @@ export function escalationOf(run: Pick<RecordedRun, "trace" | "routerReason">): 
 export function pipelineIds(run: Pick<RecordedRun, "trace" | "lane">): PipelineNodeId[] {
   const ran = new Set(run.trace.map((s) => s.node));
   if (run.lane === "quick") return [...QUICK_ORDER];
+  if (run.lane === "forecast") return [...FORECAST_ORDER];
   return PIPELINE_ORDER.filter((id) => {
     if (QUICK_ONLY.includes(id)) return ran.has(id);
     if (id === "router") return ran.has("router");
@@ -113,7 +135,7 @@ function llmIds(modelId: string | null | undefined): string[] {
     .filter((m) => m && m !== "deterministic");
 }
 
-/** Badge for an LLM id, by the shared provider rule (`providerOf`): Nemotron ids are Nightshift, anthropic/ ids the test switch. */
+/** Badge for an LLM id, by the shared provider rule (`providerOf`): Nemotron ids are Nightshift. */
 export function modelBadge(modelId: string, provider?: string | null): PipelineBadge {
   const label = laneLabel(modelId);
   const p = providerOf(modelId, provider);

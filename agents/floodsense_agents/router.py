@@ -1,17 +1,21 @@
 """Router agent: which agent path answers a chat message.
 
-Three lanes:
+Four lanes:
 
-    reply  small talk and help (front_door.py): a fixed template, no run.
-    quick  a live-data question one view read can answer: Scope, the live
-           watcher (gauge_levels, hazard_now, eu_watch when it exists), one
-           fast-lane call, the deterministic Judge. No Playbook, no HITL.
+    reply     small talk and help (front_door.py): a fixed template, no run.
+    quick     a live-data question one view read can answer: Scope, the live
+              watcher (gauge_levels, hazard_now, eu_watch), template claims,
+              the deterministic Judge. No Playbook, no HITL.
+    forecast  "do the next 48 hours look safe at Köln?": Scope, forecast data
+              (weather_forecast, the GloFAS discharge forecast, the gauge),
+              history (replay seed, RAG passages, H-MEM), deterministic claims
+              plus a template lead (no model call), the deterministic Judge (nodes/forecast.py).
     full   the deep investigation (graph.py), for why / replay / exposure /
            insurer actions / documents, and every explicit event_id,
            replay_ts or doc_query (so the evals keep their path).
 
-Rules first. A clear full word wins; a live word plus a known place picks
-quick. Only an ambiguous message (a live word or a place, not both) asks the
+Rules first. A clear full word wins; a forecast cue plus a watched place
+picks forecast; a live word plus a known place picks quick. Only an ambiguous message (a live word or a place, not both) asks the
 fast lane (``TASK: router``) with the front door's short deadline. A failure
 there means full: the old behaviour.
 """
@@ -35,8 +39,20 @@ from floodsense_agents.nightshift import LLM, parse_json, submit_with_deadline
 
 log = logging.getLogger("floodsense.router")
 
-REPLY, QUICK, FULL = "reply", "quick", "full"
-LANES = (REPLY, QUICK, FULL)
+REPLY, QUICK, FORECAST, FULL = "reply", "quick", "forecast", "full"
+LANES = (REPLY, QUICK, FORECAST, FULL)
+
+# A question about what comes next: a horizon, a forecast word, "will ... rise",
+# "look safe". EN, DE, ES. "Guten Morgen" is a greeting, not tomorrow.
+_FORECAST = re.compile(
+    r"\b(next\s+(few\s+)?\d*\s*(h|hrs?|hours?|days?|week)|coming\s+(hours?|days?|week)|"
+    r"tomorrow|tonight\s+and\s+tomorrow|this\s+week(end)?|over\s+the\s+weekend|"
+    r"forecasts?|outlook|will\b[^?.!]{0,40}\b(rise|rising|flood\w*|go\s+up|overflow|"
+    r"burst|be\s+safe|be\s+ok|stay\s+safe|get\s+worse)|look(s)?\s+(safe|ok|okay|fine)|"
+    r"(?<!guten\s)morgen|übermorgen|nächsten?\s+(?:\d+\s*)?(?:stunden|std|tage|tagen|wochen?)|vorhersage\w*|"
+    r"mañana|manana|próxim[oa]s?\s+(?:\d+\s*)?(?:horas?|d[ií]as?|semanas?)|proxim[oa]s?\s+(?:\d+\s*)?(?:horas?|dias?|semanas?)|pronóstico|pronostico|previsión|prevision)\b",
+    re.I,
+)
 
 # A live reading: the present, a level, a trend, a short horizon.
 _LIVE = re.compile(
@@ -96,6 +112,20 @@ def enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def forecast_enabled() -> bool:
+    v = (os.environ.get("FF_FORECAST_LANE") or "true").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _ctx_dict(context: Any) -> dict:
+    if context is None:
+        return {}
+    if isinstance(context, dict):
+        return context
+    dump = getattr(context, "model_dump", None)
+    return dump() if callable(dump) else {}
+
+
 def place_in(question: str, context: Any = None) -> str | None:
     """The first known place, station or river the message names, upper-cased."""
     target = watch_target(question or "")
@@ -120,8 +150,18 @@ def rules(question: str, context: Any = None) -> tuple[str | None, str]:
     mode, why = live_classify(q)
     if mode == "event" and why.startswith("question names a past moment"):
         return FULL, why
-    live = _LIVE.search(q)
     place = place_in(q, context)
+    cue = _FORECAST.search(q)
+    if cue and forecast_enabled():
+        from floodsense_agents.nodes.forecast import forecast_places, label
+
+        named = forecast_places(q, _ctx_dict(context))
+        if named:
+            return FORECAST, (
+                f"forecast question ('{cue.group(0).lower()}') about "
+                f"{', '.join(label(p) for p in named)}"
+            )
+    live = _LIVE.search(q)
     if live and place:
         return QUICK, f"live {_kind(live.group(0))} question about {place}"
     if live:
@@ -174,15 +214,19 @@ def route(req: Any, llm: LLM | None = None) -> dict[str, Any]:
         return out(FULL, "explicit event_id, replay_ts or doc_query")
     if getattr(req, "mode", None) == "event":
         return out(FULL, "mode=event requested")
-    if not enabled():
-        return out(FULL, "FF_QUICK_LANE is off")
+    if not enabled() and not forecast_enabled():
+        return out(FULL, "FF_QUICK_LANE and FF_FORECAST_LANE are off")
     if not settings.live_data:
         # The seed schema holds no present: the quick lane would answer "now" from a replay.
         return out(FULL, "live data is off (FF_LIVE_DATA), so nothing answers now")
     ctx = getattr(req, "context", None)
     lane, reason = rules(req.question, ctx)
+    if lane == QUICK and not enabled():
+        return out(FULL, f"{reason}, but FF_QUICK_LANE is off")
     if lane is not None:
         return out(lane, reason)
+    if not enabled():
+        return out(FULL, f"{reason}; FF_QUICK_LANE is off")
     if llm is None:
         return out(FULL, f"{reason}; no model to ask")
     got = _ask_model(llm, req.question, front_door._timeout_s())

@@ -100,11 +100,6 @@
         <option value="EMSR517">EMSR517 &middot; Ahr 2021</option>
       </select>
       <input name="replay_ts" placeholder="replay ts, optional" size="22">
-      <!-- Test only: shown when GET /config lists more than one provider. -->
-      <select name="llm_provider" id="provider" class="hide" title="Local benchmarking only; the demo runs Nightshift">
-        <option value="nightshift">LLM: Nightshift (NVIDIA)</option>
-        <option value="anthropic">LLM: Anthropic (test)</option>
-      </select>
       <button id="go">Run</button>
     </form>
     <div id="runerr" class="err mono hide"></div>
@@ -178,11 +173,6 @@ async function api(path, opts) {
     const on = Object.entries(cfg.flags).filter((e) => e[1]).map((e) => e[0].replace("FF_", ""));
     $("#status").textContent = on.join(" / ") + " / " + cfg.schema;
     $("#build").textContent = ver.sha.slice(0, 12) + " / " + ver.built;
-    const providers = Array.isArray(cfg.llm_providers) ? cfg.llm_providers : ["nightshift"];
-    if (providers.length > 1) {
-      [...$("#provider").options].forEach((o) => { o.hidden = !providers.includes(o.value); });
-      $("#provider").className = "";
-    }
   } catch (e) {
     $("#status").textContent = "service unreachable";
     $("#status").className = "tag err";
@@ -205,9 +195,6 @@ $("#ask").addEventListener("submit", async (e) => {
   const f = new FormData(e.target);
   const body = { question: f.get("question"), event_id: f.get("event_id") };
   if (f.get("replay_ts")) body.replay_ts = f.get("replay_ts");
-  if (!$("#provider").classList.contains("hide") && f.get("llm_provider")) {
-    body.llm_provider = f.get("llm_provider");
-  }
   $("#go").disabled = true;
   $("#go").textContent = "Running";
   $("#runerr").className = "err mono hide";
@@ -253,7 +240,6 @@ function render() {
   if (j) {
     $("#judge").innerHTML = [
       stat("overall", j.overall.toFixed(2), j.passes ? "ok" : "bad"),
-      stat("hallucination", pct(j.hallucination_rate), j.hallucination_rate > 0 ? "bad" : "ok"),
       stat("citation coverage", pct(j.citation_coverage)),
       stat("numeric accuracy", pct(j.numeric_accuracy)),
       stat("claims judged", j.n_claims),
