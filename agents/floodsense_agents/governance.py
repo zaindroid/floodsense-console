@@ -120,8 +120,8 @@ DEFINITIONS: dict[str, Definition] = {
         used_by="watchers",
         owner="hazard data lead",
     ),
-    # The map's demo line is SIMULATED_ALERT_M3S (100) in ui/src/config/scenario.ts.
-    # Keep the two equal; ui/src/lib/alertLine.test.ts fails if they drift.
+    # The map's demo line is SIMULATED_ALERT_M3S (80) in ui/src/config/scenario.ts.
+    # That simulation is not this anomaly, and the two numbers are not one constant.
     "anomaly_discharge": Definition(
         term="anomaly_discharge",
         value=100,

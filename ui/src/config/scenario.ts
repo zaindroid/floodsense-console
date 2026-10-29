@@ -13,11 +13,11 @@ export const SIM_WINDOW_END = "2024-10-31";
 export const SIM_PLAY_INTERVAL_MS = 900;
 
 /**
- * The one FloodSense alert line, in m³/s: Sites map, Replay and Overview all read it.
- * Mirrors anomaly_discharge (100) in agents/floodsense_agents/governance.py.
- * Not a warning level and not official.
+ * Demo line for the map alert simulation, in m³/s.
+ * Not a warning level, and not the Watchers anomaly. That is anomaly_discharge
+ * (100) in agents/floodsense_agents/governance.py. The two numbers are separate.
  */
-export const SIMULATED_ALERT_M3S = 100;
+export const SIMULATED_ALERT_M3S = 80;
 
 /** Marker bands below the simulation threshold, in m³/s. */
 export const BAND_TYPICAL_M3S = 1;

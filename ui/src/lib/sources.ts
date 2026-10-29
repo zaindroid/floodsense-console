@@ -37,7 +37,7 @@ const GLOFAS: SourceLink = { href: "https://open-meteo.com/en/docs/flood-api", l
 
 /** exposure_join rows are the synthetic insurer book joined to OSM sites, not an observed event layer. */
 export const SYNTHETIC_PORTFOLIO: SourceLink = {
-  href: "https://github.com/GenAI-Open-Agent-Hackathon/FloodSenseEU-Hackathon-Monorepo/blob/main/ingestion/prep/synthetic_portfolio.py",
+  href: "https://github.com/GenAI-Open-Agent-Hackathon/Hackathon-Monorepo/blob/main/ingestion/prep/synthetic_portfolio.py",
   label: "Synthetic insurer portfolio (demo data) · OSM sites",
 };
 

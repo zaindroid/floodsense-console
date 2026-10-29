@@ -56,7 +56,7 @@ export function TechTrace({ run, caption, embedded }: { run: RecordedRun; captio
           {model.judgeLine}
         </p>
       )}
-      <ul className={model.tiles.length > 4 ? "tt-tiles tt-tiles-5" : "tt-tiles"}>
+      <ul className="tt-tiles">
         {model.tiles.map((tile) => {
           const expanded = open.has(tile.id);
           return (

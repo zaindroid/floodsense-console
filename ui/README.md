@@ -116,7 +116,7 @@ The insurer desk shows:
 
 Approve, edit, and reject stay in the browser. Nothing is sent.
 
-The 100 m³/s line (`SIMULATED_ALERT_M3S` in `src/config/scenario.ts`) is the one alert line: the Sites map peak band, Replay and the Alerts rehearsal read it, and it equals `anomaly_discharge` in `agents/floodsense_agents/governance.py` (a test keeps them equal). `warning_level` in the hazard rows is null, and the notice is labelled a simulation.
+The 80 m³/s line (`SIMULATED_ALERT_M3S` in `src/config/scenario.ts`) only colours the replay map's peak band; the Alerts rehearsal uses the 100 m³/s Watchers line. It is not the Watchers anomaly, which is 100 m³/s (`anomaly_discharge` in `agents/floodsense_agents/governance.py`). `warning_level` in the hazard rows is null, and the notice is labelled a simulation.
 
 The chosen past flood is `eventId` in `ConsoleContext` (default EMSR517 = Ahr 2021; the Ahr map date and point live there too), picked in the header and used only in Past flood mode by Replay, Sites / map, Portfolio, Alerts rehearsal and the citizen pages. The header subtitle is the product tagline "Explainable flood risk for Europe" (`headerSubtitle` in `src/lib/events.ts`). The context strip is described under "Global mode". Citizen Now has one Europe live-watch map, the place search and "Places to watch"; insurer Now keeps the dense page (see "Citizen live-first").
 

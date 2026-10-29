@@ -227,8 +227,6 @@ class ContractTests(unittest.TestCase):
             "meterless/deep",
             "nvidia/nemotron-3.5-super-vl-120b-a12b",
             "nvidia/nemotron-3.5-lightning-30b-a3b",
-            "nvidia/Nemotron-3.5-Super-VL",
-            "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
             "deterministic",
         ]
         self.assertEqual(DEFS["judge_claim"]["properties"]["model_id"]["enum"], enum)

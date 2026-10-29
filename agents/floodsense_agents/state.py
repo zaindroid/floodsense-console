@@ -73,8 +73,6 @@ class FloodState(TypedDict, total=False):
     claims: list[dict[str, Any]]  # Claim[]
     memories: list[dict[str, Any]]  # H-MEM recall for this run: context, never evidence
     thread: list[dict[str, Any]]  # earlier turns of this conversation: short-term memory
-    web: dict[str, Any]  # Tavily call: status, query, latency_ms, cached, items (untrusted data)
-    web_check: dict[str, Any]  # Skeptic: one alert-timing claim vs web context (never a verdict)
     summary: str
     judge_summary: dict[str, Any]  # JudgeSummary
     revise_rounds: int

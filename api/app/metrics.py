@@ -23,7 +23,6 @@ class Counters:
         self.replays_served = 0
         self.rejected_total = 0
         self._rejected_at: deque[float] = deque(maxlen=10_000)
-        self._latency_ms: dict[str, deque[int]] = {}
 
     def cache_hit(self) -> None:
         with self._lock:
@@ -41,19 +40,6 @@ class Counters:
         with self._lock:
             self.rejected_total += 1
             self._rejected_at.append(self.clock())
-
-    def run_latency(self, lane: str, ms: int) -> None:
-        with self._lock:
-            self._latency_ms.setdefault(lane, deque(maxlen=200)).append(int(ms))
-
-    def latency_stats(self) -> dict:
-        """Per lane {n, p50_ms, p95_ms} over the last 200 synchronous runs (nearest rank)."""
-        with self._lock:
-            lanes = {k: sorted(v) for k, v in self._latency_ms.items() if v}
-        return {
-            k: {"n": len(v), "p50_ms": v[(len(v) - 1) // 2], "p95_ms": v[-(-95 * len(v) // 100) - 1]}
-            for k, v in lanes.items()
-        }
 
     def recent_rejections(self, window_s: float = RECENT_WINDOW_S) -> int:
         cutoff = self.clock() - window_s

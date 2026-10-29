@@ -3,7 +3,7 @@ import { SafeLink } from "./SafeLink";
 import { LiveEvidenceView } from "./LiveSources";
 import { useConsole } from "../context/ConsoleContext";
 import { useDismiss } from "../hooks/useDismiss";
-import { numberedCitations, retrievedAt, WEB_LABEL, webCitations } from "../lib/citations";
+import { numberedCitations } from "../lib/citations";
 import { drawerFields, type Reference } from "../lib/references";
 import { formatCell, formatDay } from "../lib/format";
 import { glofasDischargeNote, pointById, provenanceForSource, rowAt, sourceExplanation } from "../lib/series";
@@ -218,7 +218,6 @@ export function EvidenceDrawer() {
             <h3>Citations</h3>
             <CitationList answer={desk.answer} />
           </section>
-          <WebCitations answer={desk.answer} />
           <section>
             <h3>provenance view</h3>
             <p className="note">
@@ -288,31 +287,6 @@ export function CitationList({ answer }: { answer: Answer }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-/** Tavily web snippets, if the run used them. Context only, never styled as a warning. */
-export function WebCitations({ answer }: { answer: Answer }) {
-  const items = webCitations(answer);
-  if (items.length === 0) return null;
-  return (
-    <section aria-label="Web citations">
-      <h3>Web citations</h3>
-      <p className="note">{WEB_LABEL}.</p>
-      <ul className="citation-list">
-        {items.map(({ n, citation }) => (
-          <li key={citation.citation_id}>
-            <p className="menu-title">
-              [{n}] {citation.title}
-            </p>
-            <p className="note">
-              <SafeLink href={citation.source_url}>{citation.source_url}</SafeLink>
-              {retrievedAt(citation) ? ` · retrieved ${retrievedAt(citation)}` : ""}
-            </p>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 

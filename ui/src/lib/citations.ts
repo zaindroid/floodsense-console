@@ -23,14 +23,3 @@ export function citationsById(answer: Answer, ids: readonly string[]): NumberedC
 export function citationMarks(items: NumberedCitation[]): string {
   return items.map((item) => `[${item.n}]`).join("");
 }
-
-export const WEB_LABEL = "Web context, not an official warning";
-
-/** Tavily web snippets (agents/tavily.py): attribution carries the label and "retrieved <time> via Tavily". */
-export function webCitations(answer: Answer): NumberedCitation[] {
-  return numberedCitations(answer).filter((i) => /via Tavily/.test(i.citation.attribution ?? ""));
-}
-
-export function retrievedAt(citation: Citation): string | null {
-  return /retrieved (\S+) via Tavily/.exec(citation.attribution ?? "")?.[1] ?? null;
-}

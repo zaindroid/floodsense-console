@@ -155,16 +155,6 @@ The quick and forecast lanes add a `plain` object next to their claims and summa
 
 `status` (`normal`/`watch`/`elevated`/`unknown`) and `basis` (`gauge`/`model`) let the UI pick the existing status chip. Contract: `plain` in `contracts/schemas/floodsense.schema.json`. Tests: `agents/tests/test_plain.py`.
 
-## Nebius Token Factory backend
-
-`LLM_BACKEND=nebius` swaps the transport for `NebiusClient` (`nightshift.py`): `POST $NEBIUS_BASE_URL/chat/completions` (default `https://api.tokenfactory.nebius.com/v1`, Bearer `NEBIUS_API_KEY`) on `NEBIUS_MODEL_FAST` / `NEBIUS_MODEL_DEEP` (NVIDIA Nemotron ids). Retry, 429 backoff and the JSON-mode downgrade are shared with the Nightshift client. A missing key fails at startup. `GET /config` and `/ready` show `llm_backend`. Default is `nightshift`. Offline tests only (`tests/test_nebius.py`); live calls are unverified, and so are the default Nemotron ids (checked against Nebius web pages, not `GET /v1/models`) and `response_format: json_object` support (a 400 naming it drops the field). `enable_thinking` is not sent, so hidden reasoning may eat `max_tokens`. The default Nebius ids are in the contract `model_id` enum, so Judge scores keep them. Logs and the unavailable error stay Nightshift-worded in the info lines; the final error says `Nebius`.
-
-### Nebius evidence: lane check, usage, pacer
-
-- **Lane check.** `python tasks.py check-llm` (or `POST /llm/check` on the agents) sends one tiny completion per lane and prints `ok`, the model id that answered, `nemotron` (true when that id names Nemotron) and `latency_ms`. Exit 1 if a lane fails or answers off-Nemotron. The last result shows in `GET /config` (`llm_check`, null until run) and `GET /platform/status`. It spends a few tokens. Live behaviour is unverified: tests use `httpx.MockTransport` only.
-- **Usage.** Each reply's OpenAI `usage` is added per (lane, model id): to the run (`usage` on the run result and `GET /runs/{id}`; in agents memory, lost on restart, not in the checkpoint) and to a process total (`llm_usage` in `GET /config` and `/platform/status`: calls, tokens, avg latency per lane). Set `NEBIUS_PRICE_PER_M_INPUT` and `NEBIUS_PRICE_PER_M_OUTPUT` (USD per 1M tokens, unset by default; set both) and `cost_usd` is an estimate; otherwise `cost_usd` is null and `price_note` says "price not configured". No prices are built in. The Router's call counts; calls from a thread that lost the run context count only in the process total.
-- **Pacer.** With `LLM_BACKEND=nebius` the process-wide gate uses `NEBIUS_RPM` (default 60 starts/min) and `NEBIUS_MAX_CONCURRENCY` (default 4); the Nightshift backend keeps `NIGHTSHIFT_RPM` (35) and `NIGHTSHIFT_MAX_CONCURRENCY` (3). The Nebius defaults are a guess, not a documented limit. `NEBIUS_RPM=0` turns pacing off.
-
 ## Nightshift speed and retries
 
 Measured on Nightshift with Nemotron 3.5 Lightning 30B A3B (the model behind both lanes in every call recorded on 27 Oct) at about 60 to 70 completion tokens/s, and most completion tokens are hidden reasoning even with `enable_thinking=false`, so latency follows token count. Long generations get a **502 from the gateway at about 45 s**.
@@ -240,8 +230,6 @@ The NVIDIA chat key is not a variable in `.env`. It lives only in Nightshift's P
 ### Getting the NIM embeddings key
 
 Only needed for layer (c) (`FF_RAG_DOCS`, `scripts/rag_ingest.py`). Generate your own key. It is a separate key from the one in Nightshift's Providers tab, even when both come from the same NVIDIA account.
-
-`FF_TAVILY=true` plus `TAVILY_API_KEY` (your own key from tavily.com) turns on `tavily.py`: one Search call per place from `request.context.place` in the Investigator, snippets cited by URL and labelled "Web context, not an official warning". The call is its own trace entry (`tavily`: query, result count, latency, cached; never the key), and the Skeptic runs one extra fast-lane check, `web_check`, of one alert-timing claim against the cleaned snippets (fenced as untrusted data; result `supports|contradicts|neutral` plus the URL, context only, never a verdict). Off by default; with no key or on any error the run skips it. `TAVILY_TIMEOUT_S` (default 6).
 
 1. Sign in at [build.nvidia.com](https://build.nvidia.com) with a free NVIDIA account.
 2. Open the `nvidia/nemotron-3.5-embed-1b` model page. (`nvidia/llama-nemotron-embed-1b-v2` is retired and answers HTTP 410.)

@@ -1,4 +1,3 @@
-import { SIMULATED_ALERT_M3S } from "../config/scenario";
 import { parseUtc } from "./time";
 
 /** One hourly (or daily) reading at a point. Same fields as hazard_timeline. */
@@ -25,8 +24,8 @@ export interface DisasterEvent {
 }
 
 export const REPLAY_EVENTS: readonly DisasterEvent[] = [
-  { eventId: "EMSR517", name: "Ahr valley, 13–16 Jul 2021", start: "2021-07-13", end: "2021-07-16", thresholdM3s: SIMULATED_ALERT_M3S },
-  { eventId: "EMSR773", name: "Valencia DANA, 28–31 Oct 2024", start: "2024-10-28", end: "2024-10-31", thresholdM3s: SIMULATED_ALERT_M3S },
+  { eventId: "EMSR517", name: "Ahr valley, 13–16 Jul 2021", start: "2021-07-13", end: "2021-07-16", thresholdM3s: 100 },
+  { eventId: "EMSR773", name: "Valencia DANA, 28–31 Oct 2024", start: "2024-10-28", end: "2024-10-31", thresholdM3s: 100 },
 ];
 
 export function replayLabel(event: DisasterEvent): string {

@@ -43,12 +43,6 @@ class Settings:
     meterless_runtime_token: str = _env("METERLESS_RUNTIME_TOKEN", "") or ""
     model_fast: str = _env("MODEL_FAST", "meterless/fast")
     model_deep: str = _env("MODEL_DEEP", "meterless/deep")
-    # Nebius Token Factory (LLM_BACKEND=nebius): see NebiusClient in nightshift.py
-    llm_backend: str = _env("LLM_BACKEND", "nightshift")  # nightshift | nebius
-    nebius_api_key: str = _env("NEBIUS_API_KEY", "") or ""
-    nebius_base_url: str = _env("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1")
-    nebius_model_fast: str = _env("NEBIUS_MODEL_FAST", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B")
-    nebius_model_deep: str = _env("NEBIUS_MODEL_DEEP", "nvidia/Nemotron-3.5-Super-VL")
     llm_timeout_s: float = float(_env("LLM_TIMEOUT_S", "180"))
     # Attempts per call for transient errors (5xx, connection, bad JSON body).
     # A read timeout is never retried: it already cost llm_timeout_s, and the
@@ -91,9 +85,6 @@ class Settings:
     ff_judge: bool = _flag("FF_JUDGE", True)
     ff_hmem: bool = _flag("FF_HMEM", False)
     ff_rag_docs: bool = _flag("FF_RAG_DOCS", False)
-    ff_tavily: bool = _flag("FF_TAVILY", False)  # cited web context via Tavily Search
-    tavily_api_key: str | None = _env("TAVILY_API_KEY")
-    tavily_timeout_s: float = float(_env("TAVILY_TIMEOUT_S", "6"))
 
     # Skeptic / Judge knobs
     skeptic_max_rounds: int = int(_env("SKEPTIC_MAX_ROUNDS", "3"))
@@ -130,8 +121,6 @@ class Settings:
         environment after import is used; otherwise the field, which tests
         can assign.
         """
-        if self.llm_backend == "nebius" and name in ("fast", "deep"):
-            return self.nebius_model_fast if name == "fast" else self.nebius_model_deep
         if name == "fast":
             env_name, field, default = "MODEL_FAST", self.model_fast, "meterless/fast"
         elif name == "deep":

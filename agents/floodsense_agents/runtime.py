@@ -26,7 +26,6 @@ from floodsense_agents.events import route_event, spec
 from floodsense_agents.graph import build_deps, build_graph
 from floodsense_agents.hitl import approval_payload
 from floodsense_agents.models import ApprovalDecision, RunRequest
-from floodsense_agents.nightshift import UsageMeter, run_meter
 from floodsense_agents.state import memory_used, normalise_trace, run_model_ids, trace
 from floodsense_agents.zetaris import now_utc
 
@@ -112,8 +111,6 @@ class Runtime:
         ] = {}  # run_id -> row for /runs/past (this process; state lives in the checkpointer)
         # Background runs of this process: run_id -> {"started": [...], "done": bool}.
         self.live: dict[str, dict[str, Any]] = {}
-        # Token usage per run, this process only (not in the checkpoint).
-        self.meters: dict[str, UsageMeter] = {}
         self._live_lock = threading.Lock()
         # Observers of the run lifecycle: fn(kind, run_id) with kind "paused" (a run left the
         # graph call: awaiting approval, answered or failed) or "resumed" (a decision landed).
@@ -203,8 +200,6 @@ class Runtime:
         out["cached_at"] = at
         # Queries that errored. An answer resting on one of these is standing
         # on a hole, and the reviewer has to be told before deciding.
-        m = self.meters.get(run_id)
-        out["usage"] = m.as_dict() if m else None
         out["failures"] = [
             {"query_id": q, "view": e.get("view"), "error": e.get("error")}
             for q, e in (out.get("evidence") or {}).items()
@@ -313,7 +308,6 @@ class Runtime:
 
     def _execute(self, run_id: str, inputs: dict[str, Any], *, stream: bool = False) -> None:
         self._track(run_id)
-        tok = run_meter.set(self.meters.setdefault(run_id, UsageMeter()))
         try:
             if stream:
                 for chunk in self.graph.stream(inputs, self.cfg(run_id), stream_mode="debug"):
@@ -332,7 +326,6 @@ class Runtime:
             except Exception as e2:  # noqa: BLE001 - the in-memory mark stands
                 log.warning("run %s: could not record the failure: %s", run_id, str(e2)[:120])
         finally:
-            run_meter.reset(tok)
             with self._live_lock:
                 self.live[run_id]["done"] = True
             try:
@@ -363,11 +356,7 @@ class Runtime:
         )
         t_route = time.time()
         llm = getattr(self.deps, "llm", None) if self.deps is not None else None
-        tok = run_meter.set(self.meters.setdefault(run_id, UsageMeter()))
-        try:
-            lane = router.route(req, llm)
-        finally:
-            run_meter.reset(tok)
+        lane = router.route(req, llm)
         router_trace = trace(
             {"run_id": run_id, "trace": []},
             "router",
@@ -401,11 +390,7 @@ class Runtime:
         s = self.snapshot(run_id)
         if s["status"] != "awaiting_approval":
             raise NotAwaitingApproval(f"run {run_id} is {s['status']}, not awaiting approval")
-        tok = run_meter.set(self.meters.setdefault(run_id, UsageMeter()))
-        try:
-            self.graph.invoke(Command(resume=decision.model_dump()), self.cfg(run_id))
-        finally:
-            run_meter.reset(tok)
+        self.graph.invoke(Command(resume=decision.model_dump()), self.cfg(run_id))
         out = self.snapshot(run_id)
         # N1: store used to run here on every approval, FF_HMEM or not. It now
         # runs in the graph's Learn node (nodes/memory.py), behind FF_HMEM, so

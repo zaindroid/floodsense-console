@@ -268,6 +268,6 @@ export function headlineText(c: HeadlineCounts): string {
 export function replayStatus(m3s: number | null, threshold: number): StatusView {
   if (m3s === null) return { word: "No reading", tone: "unknown", rank: 9 };
   return m3s >= threshold
-    ? { word: `Above the ${threshold} m³/s FloodSense alert line (daily value)`, tone: "elevated", rank: 4 }
-    : { word: `Below the ${threshold} m³/s FloodSense alert line (daily value)`, tone: "normal", rank: 8 };
+    ? { word: `Above the ${threshold} m³/s FloodSense alert line`, tone: "elevated", rank: 4 }
+    : { word: `Below the ${threshold} m³/s FloodSense alert line`, tone: "normal", rank: 8 };
 }
