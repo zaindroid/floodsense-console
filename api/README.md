@@ -50,6 +50,10 @@ Router lanes: a reply carries `lane: "reply"`; a run snapshot carries `lane` (`q
 
 Passed through to the agents' watch loop (`agents/README.md` "Control tower"): `GET /watch/events?since=&limit=`, `GET /watch/status`, `GET /watch/stream` (SSE proxied as-is; `Last-Event-ID` is forwarded), `POST /watch/cycle` ("Scan now") and `POST /watch/auto-assess {enabled}`. `POST /watch/cycle` is `202` (the scan runs on the agents). `POST /watch/auto-assess` needs the header `x-watch-admin-token` when `WATCH_ADMIN_TOKEN` is set on the API (it is passed on to the agents); set it on any machine that is not a dev box. The two POSTs share a small bucket of their own, `WATCH_CYCLES_PER_MIN` (6) per client, so a scan or a switch never spends a run token; empty is `429` with `Retry-After`. The GETs are not limited. An unreachable agents service is `503`.
 
+## Platform strip (`GET /platform/status`)
+
+Small read-only body (`app/platform_status.py`, `Cache-Control: no-store`, no keys or URLs) for the UI Platform strip: `llm_backend` (`nightshift|nebius`, from the agents `/config`), `lanes` (model id per lane), `data_backend` and `tavily` (both from the agents `/config`, the source of truth: `data_backend` is always `zetaris` today; `tavily` is the agents' `FF_TAVILY` switch, never the key; false when the agents are down), `latency` (`{lane: {n, p50_ms, p95_ms}}` API-side, of the last 200 synchronous `POST /runs` this process forwarded (async runs are not timed), by the run's `lane`, else `full`), `cache` (`backend, hits, misses, hit_rate`), `rate_limit` (`in_flight, max_concurrent, runs_per_min, rejected_429_recent, rejected_429_total`), `live_sources` (agents `/watch/status` counts.sources) and `counters_since_utc`. Counters reset on restart. TypeScript: `ui/src/api/platform.ts`.
+
 ## System status (`GET /system`)
 
 ## Views cache (`GET /views/{name}`)

@@ -839,6 +839,7 @@ class ControlTower:
         self._announced: set[str] = set()
         self.auto_runs: dict[str, Source] = {}
         self._thread: threading.Thread | None = None
+        self._scan_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.scanning = False
         self.next_cycle_at: str | None = None
@@ -925,7 +926,10 @@ class ControlTower:
         if block:
             return self.cycle("manual")
         self.scanning = True  # visible at once; the thread's cycle() owns it from here
-        threading.Thread(target=self._forced, name="control-tower-scan", daemon=True).start()
+        # Kept so a shutdown can wait for it: the scan writes into data_dir, and
+        # a caller that drops the directory first races a half-written file.
+        self._scan_thread = threading.Thread(target=self._forced, name="control-tower-scan", daemon=True)
+        self._scan_thread.start()
         return {"ran": None, "started": True}
 
     def _forced(self) -> None:
@@ -1327,8 +1331,14 @@ class ControlTower:
         self._thread.start()
         return True
 
-    def stop(self) -> None:
+    def stop(self, wait_s: float = 0.0) -> None:
+        """Signal the loop to end. With wait_s, also wait for a scan still writing to data_dir."""
         self._stop.set()
+        if wait_s <= 0:
+            return
+        for thread in (self._thread, self._scan_thread):
+            if thread and thread.is_alive():
+                thread.join(wait_s)
 
     def _run(self) -> None:
         wait = 1.0  # first scan right after startup

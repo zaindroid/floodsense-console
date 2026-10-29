@@ -128,6 +128,8 @@ def _models(config: dict[str, Any] | None, latest: dict[str, Any] | None) -> dic
         "lanes": {k: str(v) for k, v in (config.get("lanes") or {}).items()},
         "flags": {k: bool(v) for k, v in flags.items()},
         "latest_model_ids": (latest or {}).get("model_ids") or [],
+        "llm_check": config.get("llm_check"),
+        "llm_usage": config.get("llm_usage"),
     }
 
 

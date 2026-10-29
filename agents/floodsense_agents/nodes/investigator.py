@@ -44,6 +44,7 @@ from floodsense_agents.prompts import INVESTIGATOR_LINK, compact_rows
 from floodsense_agents.provenance import rows_for as provenance_rows
 from floodsense_agents.settings import settings
 from floodsense_agents.state import Deps, FloodState, add_evidence, trace
+from floodsense_agents.tavily import tavily_line, tavily_state
 from floodsense_agents.watch import (
     RHINE_WATERS,
     all_sources,
@@ -1534,6 +1535,41 @@ def _attach_documents(claims, raws, request, query):
     return claims, evidence
 
 
+def _attach_web(claims, place, note, out=None):
+    """Tavily snippets as labelled layer (c) claims. Text is cleaned of digits, markup and
+    newlines (tavily.clean) and shown only as a quoted excerpt; claims carry no severity."""
+    from floodsense_agents import tavily
+
+    res = tavily.search(place)
+    if out is not None:
+        out["res"] = res
+    if res.status != "ok":
+        why = f" ({res.reason})" if res.reason else ""
+        return claims, [], f"{note.lstrip('; ')} web context {res.status}{why}".strip()
+    rows_for_q: dict[str, list[dict]] = {}
+    for n, raw in enumerate(tavily.passages(res.items, now_utc()), 1):
+        own = Claim(
+            claim_id=f"C-web-{n}",
+            text=f'{tavily.LABEL}. {raw["title"]}: "{raw["quote"]}"',
+            kind="fact",
+        )
+        _cite_passage(own, raw, 1, rows_for_q)
+        claims = [*claims, own]
+    ev = [
+        Evidence(
+            query_id=q,
+            view="web.tavily",
+            sql="Tavily Search API",
+            rows_sample=r,
+            row_count=len(r),
+            executed_at_utc=now_utc(),
+            source="tavily",
+        )
+        for q, r in rows_for_q.items()
+    ]
+    return claims, ev, note
+
+
 def make(deps: Deps):
     def investigator(state: FloodState) -> dict:
         t = time.time()
@@ -1626,7 +1662,28 @@ def make(deps: Deps):
                             claims, result.citations, request, doc_query
                         )
                         extra = [*extra, *doc_evidence]
+        web = None
+        if settings.ff_tavily and state.get("event_id") != WATCH_EVENT:
+            place = ((state.get("request") or {}).get("context") or {}).get("place")
+            if isinstance(place, str) and place.strip():
+                web_out: dict = {}
+                claims, web_ev, doc_note = _attach_web(claims, place, doc_note, web_out)
+                extra = [*extra, *web_ev]
+                web = web_out.get("res")
         out_live = {"live_findings": findings} if findings is not None else {}
+        steps = trace(
+            state,
+            "investigator",
+            f"{len(hyps)} hypotheses, {len(claims)} cited claims{link_note}{doc_note}"
+            + (" (STALE live data)" if (findings or {}).get("stale") else ""),
+            lane=lane,
+            model_id=model_id,
+            started=t,
+            evidence_ids=[e.query_id for e in extra],
+        )
+        if web is not None:  # the Tavily call as its own trace entry (no key, no secrets)
+            out_live["web"] = tavily_state(web)
+            steps = trace({**state, "trace": steps}, "tavily", tavily_line(web), started=time.time() - web.latency_ms / 1000)
         return {
             **out_live,
             "hypotheses": [h.model_dump() for h in hyps],
@@ -1635,16 +1692,7 @@ def make(deps: Deps):
             "evidence": add_evidence(state, *extra),
             "revise_rounds": state.get("revise_rounds", 0),
             "model_ids": [*state.get("model_ids", []), model_id],
-            "trace": trace(
-                state,
-                "investigator",
-                f"{len(hyps)} hypotheses, {len(claims)} cited claims{link_note}{doc_note}"
-                + (" (STALE live data)" if (findings or {}).get("stale") else ""),
-                lane=lane,
-                model_id=model_id,
-                started=t,
-                evidence_ids=[e.query_id for e in extra],
-            ),
+            "trace": steps,
         }
 
     return investigator

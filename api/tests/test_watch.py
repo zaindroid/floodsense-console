@@ -50,6 +50,10 @@ class WatchProxyTest(unittest.TestCase):
         agents_service.set_runtime(rt)
         t = tower.ControlTower(lambda: deps.zetaris, lambda: rt, data_dir=tmp.name, loop_enabled=False)
         agents_service.set_tower(t)
+        # A manual scan runs in its own thread and writes into data_dir, so it has
+        # to finish before the directory goes. Cleanups run last-registered-first,
+        # so this one runs before the TemporaryDirectory above is removed.
+        self.addCleanup(lambda: t.stop(5))
         self.addCleanup(lambda: agents_service.set_tower(None))
         inner = TestClient(agents_service.app)
 

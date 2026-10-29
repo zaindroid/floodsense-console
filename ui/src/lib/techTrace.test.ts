@@ -266,3 +266,25 @@ describe("techTrace: pickRunRow (insurer Review)", () => {
     expect(pickRunRow(rows, "past", "EMSR999")).toBeNull();
   });
 });
+
+describe("techTrace: Tavily tile", () => {
+  it("is off without a tavily trace step", () => {
+    expect(tile(QUICK, "tavily").headline).toContain("Off");
+    expect(tile(QUICK, "tavily").used).toBe(false);
+  });
+  it("shows the call and the Skeptic web check", () => {
+    const run = body({
+      trace: [
+        step(1, "tavily", "none", null, 300, "tavily query 'Koeln flood warning current'; 3 results; 300 ms; cached no"),
+        step(2, "skeptic", "sql", null, 5, "1 supported; web_check supports C-1 https://example.org/a"),
+      ],
+    });
+    const t = tile(run, "tavily");
+    expect(t.headline).toBe("On · 1 call");
+    expect(t.details.map((d) => d.value).join("|")).toContain("supports C-1, https://example.org/a");
+  });
+  it("says unavailable when the call failed", () => {
+    const run = body({ trace: [step(1, "tavily", "none", null, 1, "tavily unavailable (HTTP 429); query -")] });
+    expect(tile(run, "tavily").headline).toBe("Unavailable");
+  });
+});

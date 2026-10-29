@@ -10,7 +10,7 @@ import { formatLatency, parseBoard } from "./pipeline";
  * and a cached or recorded answer says it was not run just now.
  */
 
-export type TileId = "zetaris" | "nightshift" | "hmem" | "world";
+export type TileId = "zetaris" | "nightshift" | "hmem" | "world" | "tavily";
 
 export const GLOSSARY: Record<TileId, string> = {
   zetaris: "Zetaris: the only SQL path to the data.",
@@ -18,6 +18,7 @@ export const GLOSSARY: Record<TileId, string> = {
     "Meterless Nightshift: the gateway that routes the agents' model calls (meterless/fast and meterless/deep) to NVIDIA Nemotron models.",
   hmem: "Meterless H-MEM: remembers approved findings (and clearly labelled demo seeds).",
   world: "Meterless World Model: tracks which hypotheses the evidence still supports.",
+  tavily: "Tavily: optional web search. Its snippets are cited web context, not an official warning.",
 };
 
 export interface TileDetail {
@@ -305,6 +306,21 @@ function worldTile(run: RecordedRun): Tile {
   };
 }
 
+/* ---------- Tavily ---------- */
+
+/** Pure: Tavily state from the trace. No "tavily" step means the flag was off (or no place to search). */
+function tavilyTile(run: RecordedRun): Tile {
+  const calls = run.trace.filter((s) => s.node === "tavily");
+  const base = { id: "tavily" as const, name: "Tavily web context", glossary: GLOSSARY.tavily };
+  if (!calls.length) return { ...base, used: false, headline: "Off · no web call in this run", details: [] };
+  const last = calls[calls.length - 1];
+  const details: TileDetail[] = [{ label: "Calls", value: String(calls.length) }, { label: "Call", value: last.summary }];
+  const check = run.trace.map((s) => /web_check (supports|contradicts|neutral) (\S+) (\S+)/.exec(s.summary)).find(Boolean);
+  if (check) details.push({ label: "Skeptic web check", value: `${check[1]} ${check[2]}, ${check[3]}` });
+  const down = /unavailable/i.test(last.summary);
+  return { ...base, used: !down, headline: down ? "Unavailable" : `On · ${plural(calls.length, "call")}`, details };
+}
+
 /* ---------- Router + Judge ---------- */
 
 /** "chose quick: live level question about X" -> "live level question about X". */
@@ -357,6 +373,6 @@ export function buildTechTrace(run: RecordedRun): TechTraceModel {
   return {
     routerLine: routerLine(run),
     judgeLine: judgeLine(run),
-    tiles: [zetarisTile(run), nightshiftTile(run), hmemTile(run), worldTile(run)],
+    tiles: [zetarisTile(run), nightshiftTile(run), hmemTile(run), worldTile(run), tavilyTile(run)],
   };
 }

@@ -129,6 +129,16 @@ class SystemBodyTest(unittest.TestCase):
         self.assertTrue(body["rag"]["enabled"])
         self.assertIsNone(body["rag"]["passages"])
 
+    def test_nebius_model_ids_reach_the_system_body(self) -> None:
+        ids = ["nvidia/Nemotron-3.5-Super-VL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"]
+
+        async def agents(method, path, params=None, timeout=None):
+            if path == "/runs/r1":
+                return 200, {**RUN, "model_ids": ids}
+            return await fake_agents(method, path, params, timeout)
+
+        self.assertEqual(build(agents=agents)["models"]["latest_model_ids"], ids)
+
     def test_no_secrets_or_urls(self) -> None:
         text = json.dumps(build())
         self.assertNotIn("engines_url", text)

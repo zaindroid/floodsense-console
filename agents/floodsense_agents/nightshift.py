@@ -207,14 +207,84 @@ _gate_lock = threading.Lock()
 
 
 def default_gate() -> CallGate:
-    """The process-wide gate, built once from NIGHTSHIFT_MAX_CONCURRENCY / NIGHTSHIFT_RPM."""
+    """The process-wide gate, built once. NIGHTSHIFT_* or, with LLM_BACKEND=nebius, NEBIUS_MAX_CONCURRENCY / NEBIUS_RPM."""
     global _gate
     with _gate_lock:
         if _gate is None:
-            _gate = CallGate(
-                int(_env_num("NIGHTSHIFT_MAX_CONCURRENCY", 3)), _env_num("NIGHTSHIFT_RPM", 35)
-            )
+            if settings.llm_backend == "nebius":
+                # Token Factory limits are not verified; NEBIUS_* override these defaults.
+                _gate = CallGate(
+                    int(_env_num("NEBIUS_MAX_CONCURRENCY", 4)), _env_num("NEBIUS_RPM", 60)
+                )
+            else:
+                _gate = CallGate(
+                    int(_env_num("NIGHTSHIFT_MAX_CONCURRENCY", 3)), _env_num("NIGHTSHIFT_RPM", 35)
+                )
         return _gate
+
+
+# --- Usage metering --------------------------------------------------------
+class UsageMeter:
+    """Tokens, calls and latency per (lane, model id), from the OpenAI ``usage`` of each reply."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._rows: dict[tuple[str, str], dict[str, int]] = {}
+
+    def record(self, lane: str, model: str, usage: dict | None, latency_ms: int) -> None:
+        u = usage or {}
+        with self._lock:
+            r = self._rows.setdefault(
+                (lane, model),
+                {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "latency_ms": 0},
+            )
+            r["calls"] += 1
+            r["latency_ms"] += latency_ms
+            for k in ("prompt_tokens", "completion_tokens"):
+                r[k] += int(u.get(k) or 0)
+            r["total_tokens"] += int(u.get("total_tokens") or 0) or int(u.get("prompt_tokens") or 0) + int(
+                u.get("completion_tokens") or 0
+            )
+
+    def as_dict(self) -> dict:
+        """{lanes: {lane: {...}}, models: [...], total: {...}, cost_usd, price_note}."""
+        pin, pout = _price("NEBIUS_PRICE_PER_M_INPUT"), _price("NEBIUS_PRICE_PER_M_OUTPUT")
+        priced = pin is not None and pout is not None
+        with self._lock:
+            rows = {k: dict(v) for k, v in self._rows.items()}
+        keys = ("calls", "prompt_tokens", "completion_tokens", "total_tokens", "latency_ms")
+        lanes: dict[str, dict] = {}
+        models = []
+        total = dict.fromkeys(keys, 0)
+        for (lane, model), r in sorted(rows.items()):
+            models.append({"lane": lane, "model_id": model, **r})
+            for tgt in (lanes.setdefault(lane, dict.fromkeys(keys, 0)), total):
+                for k in keys:
+                    tgt[k] += r[k]
+        for t in (*lanes.values(), total):
+            t["avg_latency_ms"] = round(t["latency_ms"] / t["calls"]) if t["calls"] else None
+        cost = None
+        if priced:
+            cost = round((total["prompt_tokens"] * pin + total["completion_tokens"] * pout) / 1e6, 6)
+        return {
+            "lanes": lanes,
+            "models": models,
+            "total": total,
+            "cost_usd": cost,
+            "price_note": "estimate from NEBIUS_PRICE_PER_M_INPUT/OUTPUT" if priced else "price not configured",
+        }
+
+
+def _price(name: str) -> float | None:
+    try:
+        v = float(os.environ.get(name) or "")
+    except ValueError:
+        return None
+    return v if v >= 0 and v == v and v != float("inf") else None
+
+
+GLOBAL_USAGE = UsageMeter()  # this agents process since start
+run_meter: ContextVar[UsageMeter | None] = ContextVar("nightshift_run_meter", default=None)
 
 
 def submit_with_deadline(pool, timeout: float, fn: Callable[..., R], *args) -> Future:
@@ -297,6 +367,8 @@ def _retry_after(e: Exception) -> float | None:
 
 
 class NightshiftClient:
+    label = "Nightshift"
+
     def __init__(
         self,
         post: Callable[..., httpx.Response] | None = None,
@@ -410,6 +482,10 @@ class NightshiftClient:
                     choice.get("finish_reason"),
                     f" ({_note(reasons)})" if reasons else "",
                 )
+                served = js.get("model", model)
+                GLOBAL_USAGE.record(lane, served, usage, int((time.time() - t0) * 1000))
+                if (m := run_meter.get()) is not None:
+                    m.record(lane, served, usage, int((time.time() - t0) * 1000))
                 if choice.get("finish_reason") == "length":
                     # Truncated at max_tokens: never hand a cut reply to the
                     # parsers or the Judge. Not retried (same prompt, same cut).
@@ -474,7 +550,47 @@ class NightshiftClient:
                 if attempt >= attempts:
                     break
                 self._sleep(1.5 * attempt)
-        raise RuntimeError(f"Nightshift unavailable: {last}")
+        raise RuntimeError(f"{self.label} unavailable: {last}")
+
+
+class NebiusClient(NightshiftClient):
+    """Nebius Token Factory backend (``LLM_BACKEND=nebius``).
+
+    Same retry, 429 backoff and JSON-mode downgrade as NightshiftClient.
+    OpenAI-compatible ``POST {NEBIUS_BASE_URL}/chat/completions`` with
+    ``Authorization: Bearer <NEBIUS_API_KEY>``. Default base URL
+    ``https://api.tokenfactory.nebius.com/v1`` (verified in
+    docs.tokenfactory.nebius.com/api-reference/introduction). Default models are
+    NVIDIA Nemotron ids from nebius.com/services/token-factory/models/nvidia-nemotron-models-inference
+    (Nemotron-3.5-Super-VL) and third-party catalogue mirrors (Nano 30B); they are NOT confirmed against ``GET /v1/models`` with a key, so set
+    NEBIUS_MODEL_FAST / NEBIUS_MODEL_DEEP if the catalogue differs.
+    ``enable_thinking`` is not sent (undocumented on Nebius), so Nemotron reasoning may
+    count against max_tokens. ``response_format: json_object`` is not documented by Nebius; a 400 naming
+    response_format makes the shared downgrade drop it (the prompt carries JSON).
+    """
+
+    label = "Nebius"
+
+    def __init__(self, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self.base_url = (settings.nebius_base_url or "").rstrip("/")
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {settings.nebius_api_key}"}
+
+    def complete(self, lane: str, system: str, user: str, *, json: bool = True) -> tuple[str, str]:
+        model = settings.lane(lane)
+        body: dict = {
+            "model": model,
+            "temperature": 0.1,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+        if json:
+            body["response_format"] = {"type": "json_object"}
+        cap = settings.llm_max_tokens_fast if lane == "fast" else settings.llm_max_tokens_deep
+        if cap > 0:
+            body["max_tokens"] = cap
+        return self._send(lane, model, body)
 
 
 class FakeNightshift:
@@ -497,7 +613,36 @@ class FakeNightshift:
         return (h(system, user) if h else "{}"), f"fake-{lane}"
 
 
+def check_lanes(llm: LLM | None = None) -> dict:
+    """One tiny completion per lane. {backend, ok, lanes: {lane: {ok, model_id, nemotron, latency_ms, error}}}.
+
+    ``nemotron`` is True when the model id that answered names Nemotron. Needs a real key.
+    """
+    llm = llm or build_llm()
+    lanes: dict[str, dict] = {}
+    for lane in ("fast", "deep"):
+        t0 = time.time()
+        try:
+            _, model = llm.complete(lane, "Reply with the single word OK.", "ping", json=False)
+            lanes[lane] = {"ok": True, "model_id": model, "nemotron": "nemotron" in model.lower(), "error": None}
+        except Exception as e:  # noqa: BLE001 - reported, never raised
+            lanes[lane] = {"ok": False, "model_id": None, "nemotron": False, "error": str(e)[:200]}
+        lanes[lane]["latency_ms"] = int((time.time() - t0) * 1000)
+    return {
+        "backend": settings.llm_backend,
+        "ok": all(v["ok"] for v in lanes.values()),
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "lanes": lanes,
+    }
+
+
 def build_llm() -> LLM:
+    if settings.llm_backend == "nebius":
+        if settings.llm_mode == "fake":
+            return FakeNightshift()
+        if not settings.nebius_api_key:
+            raise RuntimeError("LLM_BACKEND=nebius but NEBIUS_API_KEY is not set")
+        return NebiusClient()
     return _build_nightshift()
 
 

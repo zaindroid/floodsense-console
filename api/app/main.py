@@ -22,6 +22,7 @@ Retry-After. GET routes are not limited.
 GET  /health                      this service
 GET  /views/{name}                contract view rows, cached (app/views_cache.py): x-views-cache miss | hit | stale
 GET  /config                      flags and lanes, from the agents
+GET  /platform/status             LLM/data backend, lane models, latency p50/p95, cache, 429s (app/platform_status.py)
 GET  /system                      read-only status: memory, cache, rate limits, models (app/system.py)
 POST /runs                        start a run; returns when the graph pauses for human approval
                                   (thread_id continues a conversation: short-term thread memory)
@@ -80,6 +81,7 @@ from app.cache import (
 from app.project import project_run
 from app.metrics import counters
 from app.ratelimit import RateLimiter, TokenBuckets
+from app.platform_status import build_platform_status
 from app.system import build_system
 from app.views_cache import ViewsCache, WARM_VIEWS
 
@@ -346,6 +348,16 @@ async def config() -> Response:
     return JSONResponse(data)
 
 
+@app.get("/platform/status")
+async def platform_status() -> JSONResponse:
+    """Small read-only strip for the UI: backend, models, latency, cache, limits. No secrets."""
+    body = await build_platform_status(
+        cache=cache, limiter=limiter, counters=counters,
+        agents_json=_agents_json, lookup_timeout=_lookup_timeout(),
+    )
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/system")
 async def system() -> JSONResponse:
     """Read-only status of memory, cache, rate limits and models (app/system.py). No secrets."""
@@ -517,8 +529,15 @@ async def start_run(request: Request) -> Response:
         )
     if _wants_async(request):
         return await _start_async(body)
+    t0 = time.monotonic()
     try:
         resp = await _forward("POST", "/runs", body=body, params={"front_door": "false"})
+        if resp.status_code < 300:
+            try:
+                lane = str(json.loads(resp.body).get("lane") or "full")
+            except (ValueError, AttributeError):
+                lane = "full"
+            counters.run_latency(lane, int((time.monotonic() - t0) * 1000))
     except HTTPException as e:
         if settings.cached_replay and isinstance(body, dict):
             replay = await _replay_for(

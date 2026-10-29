@@ -31,3 +31,14 @@ describe("citations", () => {
     expect(citationMarks([])).toBe("");
   });
 });
+
+describe("web citations", () => {
+  it("picks Tavily snippets and reads the retrieved time", async () => {
+    const { webCitations, retrievedAt } = await import("./citations");
+    const web = { citation_id: "w", layer: "c", title: "T", source_url: "https://example.org/a", attribution: "Web context, not an official warning; retrieved 2026-01-01T00:00:00Z via Tavily" };
+    const answer = { citations: [{ citation_id: "x", layer: "a", title: "V", attribution: "o" }, web] } as never;
+    const got = webCitations(answer);
+    expect(got.map((i) => i.n)).toEqual([2]);
+    expect(retrievedAt(got[0].citation)).toBe("2026-01-01T00:00:00Z");
+  });
+});
